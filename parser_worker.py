@@ -1,25 +1,25 @@
-import requests
 from PySide6.QtCore import QThread, Signal
-# Importa la classe ShowdownParser e i modelli dati dal tuo script
-from pokemon_parser import ShowdownParser, Match
+from pokemon_parser import ShowdownParser, parse_showdown_log
+from database.repository import save_parsed_match_to_db
 
 
 class ParserWorker(QThread):
-    finished = Signal(Match)
-    error = Signal(str)
+    finished = Signal(object)  # Emette i dati parsati in caso di successo
+    error = Signal(str)  # Emette il messaggio di errore in caso di fallimento
 
-    def __init__(self, url: str):
+    def __init__(self, log_content: str, match_name: str):
         super().__init__()
-        self.url = url
+        self.log_content = log_content
+        self.match_name = match_name  # <-- Salviamo il nome personalizzato
 
     def run(self):
         try:
-            response = requests.get(self.url, timeout=10)
-            response.raise_for_status()
-
             parser = ShowdownParser()
-            match_data = parser.parse(response.text)
+            parsed_data = parse_showdown_log(self.log_content)
 
-            self.finished.emit(match_data)
+            # Salvataggio nel Database usando il nome scelto dall'utente
+            save_parsed_match_to_db(parsed_data, self.match_name)
+
+            self.finished.emit(parsed_data)
         except Exception as e:
             self.error.emit(str(e))

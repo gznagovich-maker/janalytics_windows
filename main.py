@@ -1,82 +1,116 @@
 import sys
-from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
-                               QHBoxLayout, QLineEdit, QPushButton, QStackedWidget,
-                               QTableView, QMessageBox)
-from parser_worker import ParserWorker, Match
-from turn_action_model import TurnActionModel
+from PySide6.QtWidgets import (
+    QApplication, QMainWindow, QPushButton, QVBoxLayout, QHBoxLayout,
+    QWidget, QTextEdit, QInputDialog, QMessageBox, QStackedWidget
+)
+from parser_worker import ParserWorker
+from database.connection import init_db
+from views.replay_views import ReplayListWidget, ReplayDetailWidget
+
+
+class ImportWidget(QWidget):
+    """Schermata per incollare e salvare nuovi log"""
+
+    def __init__(self, parent_main):
+        super().__init__()
+        self.parent_main = parent_main
+
+        self.log_text_edit = QTextEdit()
+        self.log_text_edit.setPlaceholderText("Incolla qui il log di Showdown...")
+
+        self.save_button = QPushButton("Salva Replay nel DB")
+        self.save_button.clicked.connect(self.on_save_clicked)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.log_text_edit)
+        layout.addWidget(self.save_button)
+
+    def on_save_clicked(self):
+        log_content = self.log_text_edit.toPlainText().strip()
+        if not log_content:
+            QMessageBox.warning(self, "Attenzione", "Il log è vuoto!")
+            return
+
+        match_name, ok = QInputDialog.getText(
+            self, "Salva Replay", "Inserisci un ID o nome per questo match:"
+        )
+
+        if ok and match_name.strip():
+            self.save_button.setEnabled(False)
+            self.worker = ParserWorker(log_content, match_name.strip())
+            self.worker.finished.connect(self.on_parsing_finished)
+            self.worker.error.connect(self.on_parsing_error)
+            self.worker.start()
+
+    def on_parsing_finished(self, parsed_data):
+        self.save_button.setEnabled(True)
+        QMessageBox.information(self, "Successo", "Replay salvato con successo!")
+        self.log_text_edit.clear()
+        # Aggiorna la lista dei replay e passa alla schermata lista
+        self.parent_main.list_view.load_replays()
+        self.parent_main.show_list_view()
+
+    def on_parsing_error(self, error_msg):
+        self.save_button.setEnabled(True)
+        QMessageBox.critical(self, "Errore", f"Errore durante il salvataggio:\n{error_msg}")
 
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("JAnalytics Parser")
+        self.setWindowTitle("VGC Replay Analyzer")
         self.resize(800, 600)
 
-        self.stack = QStackedWidget()
-        self.setCentralWidget(self.stack)
+        init_db()
 
-        self._setup_input_ui()
-        self._setup_visualization_ui()
+        # Layout principale con Navbar in alto e StackedWidget sotto
+        main_layout = QVBoxLayout()
 
-    def _setup_input_ui(self):
-        page = QWidget()
-        layout = QVBoxLayout(page)
+        # Navigation Bar
+        nav_layout = QHBoxLayout()
+        self.btn_nav_import = QPushButton("Importa Nuovo Log")
+        self.btn_nav_list = QPushButton("Libreria Replay")
 
-        input_layout = QHBoxLayout()
-        self.url_input = QLineEdit()
-        self.url_input.setPlaceholderText("Inserisci il link del log Showdown...")
-        self.parse_btn = QPushButton("Estrai Dati")
-        self.parse_btn.clicked.connect(self.start_parsing)
+        self.btn_nav_import.clicked.connect(self.show_import_view)
+        self.btn_nav_list.clicked.connect(self.show_list_view)
 
-        input_layout.addWidget(self.url_input)
-        input_layout.addWidget(self.parse_btn)
+        nav_layout.addWidget(self.btn_nav_import)
+        nav_layout.addWidget(self.btn_nav_list)
+        nav_layout.addStretch()
+        main_layout.addLayout(nav_layout)
 
-        layout.addLayout(input_layout)
-        self.stack.addWidget(page)
+        # StackedWidget per le diverse schermate
+        self.stacked_widget = QStackedWidget()
 
-    def _setup_visualization_ui(self):
-        page = QWidget()
-        layout = QVBoxLayout(page)
+        # Le 3 schermate
+        self.import_view = ImportWidget(self)
+        self.list_view = ReplayListWidget()
+        self.detail_view = ReplayDetailWidget()
 
-        self.table_view = QTableView()
-        self.table_view.horizontalHeader().setStretchLastSection(True)
+        self.stacked_widget.addWidget(self.import_view)  # Indice 0
+        self.stacked_widget.addWidget(self.list_view)  # Indice 1
+        self.stacked_widget.addWidget(self.detail_view)  # Indice 2
 
-        back_btn = QPushButton("Torna all'inserimento")
-        back_btn.clicked.connect(lambda: self.stack.setCurrentIndex(0))
+        main_layout.addWidget(self.stacked_widget)
 
-        layout.addWidget(self.table_view)
-        layout.addWidget(back_btn)
+        container = QWidget()
+        container.setLayout(main_layout)
+        self.setCentralWidget(container)
 
-        self.stack.addWidget(page)
+        # Connessioni dei segnali tra schermate
+        self.list_view.replay_selected.connect(self.show_detail_view)
+        self.detail_view.back_requested.connect(self.show_list_view)
 
-    def start_parsing(self):
-        url = self.url_input.text().strip()
-        if not url:
-            return
+    def show_import_view(self):
+        self.stacked_widget.setCurrentIndex(0)
 
-        self.parse_btn.setEnabled(False)
-        self.parse_btn.setText("Elaborazione...")
+    def show_list_view(self):
+        self.list_view.load_replays()
+        self.stacked_widget.setCurrentIndex(1)
 
-        self.worker = ParserWorker(url)
-        self.worker.finished.connect(self.on_parsing_finished)
-        self.worker.error.connect(self.on_parsing_error)
-        self.worker.start()
-
-    def on_parsing_finished(self, match_data: Match):
-        self.parse_btn.setEnabled(True)
-        self.parse_btn.setText("Estrai Dati")
-
-        # Inietta i dati nel modello della tabella
-        model = TurnActionModel(match_data)
-        self.table_view.setModel(model)
-
-        # Passa alla seconda schermata
-        self.stack.setCurrentIndex(1)
-
-    def on_parsing_error(self, err_msg: str):
-        self.parse_btn.setEnabled(True)
-        self.parse_btn.setText("Estrai Dati")
-        QMessageBox.critical(self, "Errore", f"Impossibile analizzare il log:\n{err_msg}")
+    def show_detail_view(self, match_id: str):
+        self.detail_view.display_match(match_id)
+        self.stacked_widget.setCurrentIndex(2)
 
 
 if __name__ == "__main__":
