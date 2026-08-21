@@ -1,6 +1,6 @@
 # test_db.py
 import uuid
-from pokemon_parser import ShowdownParser, parse_showdown_log
+from src.parser.showdown import ShowdownParser, parse_showdown_log
 from database.connection import init_db, SessionLocal
 from database.repository import save_parsed_match_to_db
 from database.models import Match, PokemonBuild, TurnAction

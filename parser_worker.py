@@ -1,5 +1,5 @@
 from PySide6.QtCore import QThread, Signal
-from pokemon_parser import ShowdownParser, parse_showdown_log
+from src.parser.showdown import ShowdownParser, parse_showdown_log
 from database.repository import save_parsed_match_to_db
 
 

@@ -1,5 +1,5 @@
 from PySide6.QtCore import QAbstractTableModel, Qt
-from pokemon_parser import Match
+from src.domain.models import Match
 
 
 class TurnActionModel(QAbstractTableModel):
