@@ -1,10 +1,12 @@
 import sys
+import os
+import ctypes
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QPushButton, QVBoxLayout, QHBoxLayout,
     QWidget, QTextEdit, QInputDialog, QMessageBox, QStackedWidget, QLabel
 )
-from PySide6.QtGui import QPixmap
-from PySide6.QtCore import Qt
+from PySide6.QtGui import QPixmap, QIcon
+from PySide6.QtCore import Qt, QRect
 from parser_worker import ParserWorker
 from database.connection import init_db
 from database.pokedex_sync import sync_pokedex
@@ -15,6 +17,9 @@ from views.pokedex_views import PokedexWidget
 from views.catalog_views import MovesWidget, ItemsWidget, AbilitiesWidget, MoveDetailWidget
 from views.meta_stats_view import MetaStatsWidget
 from views.mass_import_view import MassImportWidget
+from views.core_analysis_view import GlobalMetaWidget
+from views.team_analysis_view import TeamAnalysisWidget
+from views.variant_builds_view import VariantBuildsWidget
 
 
 class ImportWidget(QWidget):
@@ -147,8 +152,9 @@ class MainWindow(QMainWindow):
 
         # Navigation Bar Container
         self.nav_container = QWidget()
-        self.nav_container.setStyleSheet("background-color: #000000;")
-        self.nav_container.setFixedHeight(70)
+        self.nav_container.setObjectName("nav_container")
+        self.nav_container.setStyleSheet("#nav_container { background-color: #000000; }")
+        self.nav_container.setFixedHeight(103)
         nav_layout = QHBoxLayout(self.nav_container)
         nav_layout.setContentsMargins(10, 0, 10, 0)
         
@@ -156,21 +162,40 @@ class MainWindow(QMainWindow):
         self.btn_nav_mass_import = QPushButton("Import Multiplo")
         self.btn_nav_list = QPushButton("Libreria Replay")
         self.btn_nav_meta_stats = QPushButton("Statistiche Meta")
+        self.btn_nav_core_analysis = QPushButton("Analisi Core")
+        self.btn_nav_team_analysis = QPushButton("Team Analysis")
 
         self.btn_nav_import.clicked.connect(self.show_import_view)
         self.btn_nav_mass_import.clicked.connect(self.show_mass_import_view)
         self.btn_nav_list.clicked.connect(self.show_list_view)
         self.btn_nav_meta_stats.clicked.connect(lambda: self.stacked_widget.setCurrentIndex(8))
+        self.btn_nav_core_analysis.clicked.connect(lambda: self.stacked_widget.setCurrentIndex(10))
+        self.btn_nav_team_analysis.clicked.connect(lambda: self.stacked_widget.setCurrentIndex(11))
 
         nav_layout.addWidget(self.btn_nav_import)
         nav_layout.addWidget(self.btn_nav_mass_import)
         nav_layout.addWidget(self.btn_nav_list)
         nav_layout.addWidget(self.btn_nav_meta_stats)
+        nav_layout.addWidget(self.btn_nav_core_analysis)
+        nav_layout.addWidget(self.btn_nav_team_analysis)
         nav_layout.addStretch()
         
         self.lbl_logo = QLabel()
-        pixmap = QPixmap(r"C:\Users\Mirco\Documents\Jorkcorp\janalytics_windows\assets\logo\J_stondo_nero.png")
-        self.lbl_logo.setPixmap(pixmap.scaledToHeight(60, Qt.TransformationMode.SmoothTransformation))
+        self.lbl_logo.setStyleSheet("background-color: #000000; border-radius: 8px; padding: 4px;")
+        
+        import os
+        if getattr(sys, 'frozen', False):
+            base_path = sys._MEIPASS
+        else:
+            base_path = os.path.dirname(os.path.abspath(__file__))
+            
+        logo_path = os.path.join(base_path, "assets", "logo", "3.svg")
+        pixmap = QPixmap(logo_path)
+        scaled_pixmap = pixmap.scaledToHeight(89, Qt.TransformationMode.SmoothTransformation)
+        # Taglia 10 pixel dal fondo
+        crop_rect = QRect(0, 0, scaled_pixmap.width(), max(1, scaled_pixmap.height() - 10))
+        cropped_pixmap = scaled_pixmap.copy(crop_rect)
+        self.lbl_logo.setPixmap(cropped_pixmap)
         nav_layout.addWidget(self.lbl_logo)
         
         main_layout.addWidget(self.nav_container)
@@ -189,6 +214,13 @@ class MainWindow(QMainWindow):
         self.move_detail_view = MoveDetailWidget()
         self.meta_stats_view = MetaStatsWidget()
         self.mass_import_view = MassImportWidget(self)
+        self.core_analysis_view = GlobalMetaWidget()
+        self.team_analysis_view = TeamAnalysisWidget()
+        self.variant_builds_view = VariantBuildsWidget()
+        
+        # Connetti segnali build
+        self.team_analysis_view.show_builds_signal.connect(self.show_variant_builds)
+        self.variant_builds_view.back_signal.connect(lambda: self.stacked_widget.setCurrentIndex(11))
 
         # Storico per navigazione
         self.previous_page_index = 1
@@ -203,6 +235,9 @@ class MainWindow(QMainWindow):
         self.stacked_widget.addWidget(self.move_detail_view) # Indice 7
         self.stacked_widget.addWidget(self.meta_stats_view) # Indice 8
         self.stacked_widget.addWidget(self.mass_import_view) # Indice 9
+        self.stacked_widget.addWidget(self.core_analysis_view) # Indice 10
+        self.stacked_widget.addWidget(self.team_analysis_view) # Indice 11
+        self.stacked_widget.addWidget(self.variant_builds_view) # Indice 12
 
         main_layout.addWidget(self.stacked_widget)
         
@@ -225,6 +260,10 @@ class MainWindow(QMainWindow):
 
     def show_mass_import_view(self):
         self.stacked_widget.setCurrentIndex(9)
+        
+    def show_variant_builds(self, variant):
+        self.variant_builds_view.load_variant(variant)
+        self.stacked_widget.setCurrentIndex(12)
 
     def show_list_view(self):
         self.list_view.load_replays()
@@ -234,76 +273,181 @@ class MainWindow(QMainWindow):
         self.detail_view.display_match(match_id)
         self.stacked_widget.setCurrentIndex(2)
 
-    def go_back(self):
-        self.stacked_widget.setCurrentIndex(self.previous_page_index)
+    def navigate_to_catalog(self, url_str: str):
+        # Esempio: "move:Incineroar", "item:Leftovers", "ability:Intimidate"
+        parts = url_str.split(":", 1)
+        if len(parts) == 2:
+            cat = parts[0]
+            val = parts[1]
+            if cat == "move":
+                self.moves_view.load_data()
+                self.moves_view.filter_input.setText(val)
+                self.stacked_widget.setCurrentIndex(4)
+            elif cat == "item":
+                self.items_view.load_data()
+                self.items_view.filter_input.setText(val)
+                self.stacked_widget.setCurrentIndex(5)
+            elif cat == "ability":
+                self.abilities_view.load_data()
+                self.abilities_view.filter_input.setText(val)
+                self.stacked_widget.setCurrentIndex(6)
 
-    def navigate_to_catalog(self, link_str: str):
-        # formattato come type:nome es. move:protect
-        if ":" not in link_str: return
-        cat, val = link_str.split(":", 1)
-        
-        # Salva la pagina attuale prima di cambiare
-        self.previous_page_index = self.stacked_widget.currentIndex()
-        
-        if cat == "move":
-            self.move_detail_view.display_move(val)
-            self.stacked_widget.setCurrentIndex(7)
-        elif cat == "item":
-            self.stacked_widget.setCurrentIndex(5)
-            self.items_view.set_search(val)
-        elif cat == "ability":
-            self.stacked_widget.setCurrentIndex(6)
-            self.abilities_view.set_search(val)
-        elif cat == "pokedex":
-            self.stacked_widget.setCurrentIndex(3)
-            self.pokedex_view.search_bar.setText(val)
-            self.pokedex_view.load_data()
+    def go_back(self):
+        # Ritorna alla lista
+        self.show_list_view()
 
 
 if __name__ == "__main__":
+    myappid = 'jorkcorp.janalytics.windows.1.0'
+    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+
     app = QApplication(sys.argv)
+    
+    if getattr(sys, 'frozen', False):
+        base_path = sys._MEIPASS
+    else:
+        base_path = os.path.dirname(os.path.abspath(__file__))
+    icon_path = os.path.join(base_path, "assets", "logo", "3.svg")
+    app.setWindowIcon(QIcon(icon_path))
     
     # Applica il Dark Theme Globale
     app.setStyle("Fusion")
     dark_stylesheet = """
+    * {
+        font-family: 'Segoe UI', 'Inter', 'Roboto', 'Helvetica Neue', sans-serif;
+    }
     QWidget {
-        background-color: #121212;
-        color: #ffffff;
+        background-color: #000000;
+        color: #E0E0E0;
         font-size: 14px;
     }
+    /* Depth and shadows for panels (Effetto Scavato) */
+    QFrame, QGroupBox, QScrollArea, QStackedWidget {
+        background-color: #0A0A0A;
+        border-top: 3px solid #000000;
+        border-left: 3px solid #000000;
+        border-bottom: 1px solid #222222;
+        border-right: 1px solid #222222;
+        border-radius: 8px;
+    }
+    /* Transparent background for main container widgets if needed */
+    QMainWindow {
+        background-color: #000000;
+    }
     QPushButton {
-        background-color: #2c3e50;
-        border: 1px solid #34495e;
-        padding: 6px 12px;
-        border-radius: 4px;
-        color: #ffffff;
-        font-weight: bold;
+        background-color: #B6FAF5; /* Primario: Ciano pastello */
+        border: none;
+        border-bottom: 3px solid #82B5B1; /* Ombra per effetto 3D */
+        color: #0A0A0A;
+        padding: 10px 20px;
+        border-radius: 18px; /* Effetto Pillola moderno */
+        font-weight: 800;
+        font-size: 13px;
+        letter-spacing: 1px;
+        text-transform: uppercase;
     }
     QPushButton:hover {
-        background-color: #34495e;
+        background-color: #FAB7F0; /* Secondario: Rosa pastello al passaggio del mouse */
+        border-bottom: 3px solid #D69AD0;
+        color: #0A0A0A;
     }
-    QLineEdit, QTextEdit, QTableWidget, QTreeWidget {
-        background-color: #1e1e1e;
-        color: #ffffff;
-        border: 1px solid #444444;
-        selection-background-color: #2980b9;
+    QPushButton:pressed {
+        background-color: #467A77; /* Terziario: Verde pastello al click */
+        border-bottom: 0px solid transparent;
+        margin-top: 3px; /* Simula l'abbassamento del bottone */
+        color: #0A0A0A;
+    }
+    QPushButton:disabled {
+        background-color: #1A1A1A;
+        border-bottom: 3px solid #111111;
+        color: #555555;
+    }
+    QLineEdit, QTextEdit, QTableWidget, QTreeWidget, QListWidget, QListView {
+        background-color: #050505;
+        color: #FFFFFF;
+        border-top: 2px solid #000000;
+        border-left: 2px solid #000000;
+        border-bottom: 1px solid #1A1A1A;
+        border-right: 1px solid #1A1A1A;
+        border-radius: 6px;
+        selection-background-color: #467A77; /* Terziario: Verde pastello */
+        selection-color: #0A0A0A;
+        padding: 4px;
+        outline: none;
+    }
+    QLineEdit:focus, QTextEdit:focus, QTableWidget:focus, QTreeWidget:focus, QListWidget:focus {
+        border: 1px solid #467A77;
     }
     QHeaderView::section {
-        background-color: #2c3e50;
-        padding: 4px;
-        border: 1px solid #444444;
+        background-color: #0A0A0A;
+        padding: 8px;
+        border: none;
+        border-bottom: 2px solid #B6FAF5;
         font-weight: bold;
-        color: #ffffff;
+        color: #FAB7F0;
+        font-size: 13px;
+        text-transform: uppercase;
     }
     QGroupBox {
-        border: 1px solid #444444;
-        margin-top: 10px;
+        border-top: 3px solid #000000;
+        border-left: 3px solid #000000;
+        border-bottom: 1px solid #222222;
+        border-right: 1px solid #222222;
+        margin-top: 25px;
         font-weight: bold;
+        border-radius: 8px;
     }
     QGroupBox::title {
         subcontrol-origin: margin;
-        subcontrol-position: top center;
-        padding: 0 5px;
+        subcontrol-position: top left;
+        padding: 0 8px;
+        left: 15px;
+        color: #B6FAF5;
+        font-size: 14px;
+        background-color: #000000; /* Isola il titolo per sembrare scolpito */
+        border-radius: 4px;
+    }
+    /* Scrollbars */
+    QScrollBar:vertical {
+        background: #000000;
+        width: 12px;
+        margin: 0px;
+    }
+    QScrollBar::handle:vertical {
+        background: #1A1A1A;
+        min-height: 20px;
+        border-radius: 6px;
+        margin: 2px;
+    }
+    QScrollBar::handle:vertical:hover {
+        background: #467A77;
+    }
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
+    
+    QScrollBar:horizontal {
+        background: #000000;
+        height: 12px;
+        margin: 0px;
+    }
+    QScrollBar::handle:horizontal {
+        background: #1A1A1A;
+        min-width: 20px;
+        border-radius: 6px;
+        margin: 2px;
+    }
+    QScrollBar::handle:horizontal:hover {
+        background: #467A77;
+    }
+    QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0px; }
+    
+    QTableWidget QPushButton {
+        padding: 4px 10px;
+        font-size: 11px;
+        border-radius: 12px;
+        border-bottom: 2px solid #82B5B1;
+    }
+    QTableWidget QPushButton:hover {
+        border-bottom: 2px solid #D69AD0;
     }
     """
     app.setStyleSheet(dark_stylesheet)

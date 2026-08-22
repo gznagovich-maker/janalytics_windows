@@ -1,10 +1,16 @@
 import os
+import sys
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-# 1. Calcola il percorso assoluto basato sulla posizione di questo file
-# (Questo assicura che il db sia sempre nella root del progetto PokemonLogParser)
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# 1. Calcola il percorso assoluto in modo compatibile con PyInstaller
+if getattr(sys, 'frozen', False):
+    # Se eseguito come eseguibile compilato da PyInstaller
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    # Se eseguito come script Python
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 DB_PATH = os.path.join(BASE_DIR, "vgc_replays.db")
 DATABASE_URL = f"sqlite:///{DB_PATH}"
 

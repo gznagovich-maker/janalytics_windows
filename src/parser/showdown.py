@@ -43,6 +43,10 @@ class ShowdownParser:
             self._parse_active_action(tag, parts)
         elif tag.startswith('-') or tag == 'faint':
             self._parse_passive_event(tag, parts)
+        elif tag == 'win':
+            self.match.winner_name = parts[2] if len(parts) > 2 else None
+        elif tag == 'tie':
+            self.match.winner_name = 'tie'
 
     def _parse_player(self, parts: List[str]):
         if len(parts) >= 4:
@@ -60,7 +64,7 @@ class ShowdownParser:
                         self.match.players[p_id].rating = rating
 
     def _add_or_update_pokemon(self, p_id: str, new_pkmn: Pokemon):
-        if p_id not in self.match.players:
+        if p_id not in self.match.players:\
             self.match.players[p_id] = Player(player_id=p_id, name=f"Player {p_id}")
             
         team = self.match.players[p_id].team

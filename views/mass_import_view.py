@@ -4,7 +4,8 @@ import urllib.error
 import datetime
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, 
-    QSpinBox, QPushButton, QProgressBar, QTextEdit, QMessageBox
+    QSpinBox, QPushButton, QProgressBar, QTextEdit, QMessageBox,
+    QLineEdit
 )
 from PySide6.QtCore import QThread, Signal
 from src.parser.showdown import parse_showdown_log
@@ -15,17 +16,30 @@ class MassImportWorker(QThread):
     finished = Signal()
     error = Signal(str)
 
-    def __init__(self, format_id: str, count: int):
+    def __init__(self, format_id: str, count: int, user: str = "", user2: str = ""):
         super().__init__()
         self.format_id = format_id
         self.count = count
+        self.user = urllib.parse.quote(user.strip()) if user else ""
+        self.user2 = urllib.parse.quote(user2.strip()) if user2 else ""
 
     def run(self):
         try:
             self.progress.emit(0, f"Ricerca degli ultimi replays per il formato '{self.format_id}'...")
             
             replays_found = []
-            page_url = f"https://replay.pokemonshowdown.com/search.json?format={self.format_id}"
+            
+            def build_url(before=None):
+                url = f"https://replay.pokemonshowdown.com/search.json?format={self.format_id}"
+                if self.user:
+                    url += f"&user={self.user}"
+                if self.user2:
+                    url += f"&user2={self.user2}"
+                if before:
+                    url += f"&before={before}"
+                return url
+                
+            page_url = build_url()
             
             while len(replays_found) < self.count:
                 req = urllib.request.Request(page_url, headers={'User-Agent': 'Mozilla/5.0'})
@@ -47,7 +61,7 @@ class MassImportWorker(QThread):
                 
                 # Paginate using the last element's upload time
                 last_upload_time = data[-1]['uploadtime']
-                page_url = f"https://replay.pokemonshowdown.com/search.json?format={self.format_id}&before={last_upload_time}"
+                page_url = build_url(before=last_upload_time)
 
             total_to_import = len(replays_found)
             self.progress.emit(0, f"Trovati {total_to_import} replays. Inizio download e importazione...")
@@ -87,7 +101,7 @@ class MassImportWidget(QWidget):
         # Top controls
         top_layout = QHBoxLayout()
         
-        top_layout.addWidget(QLabel("Formato (es. gen9championsvgc2026regma):"))
+        top_layout.addWidget(QLabel("Formato:"))
         self.combo_format = QComboBox()
         self.combo_format.setEditable(True)
         
@@ -104,6 +118,16 @@ class MassImportWidget(QWidget):
             "gen9vgc2023regd"
         ])
         top_layout.addWidget(self.combo_format)
+
+        top_layout.addWidget(QLabel("Giocatore 1:"))
+        self.edit_user = QLineEdit()
+        self.edit_user.setPlaceholderText("Es: 7upikid")
+        top_layout.addWidget(self.edit_user)
+
+        top_layout.addWidget(QLabel("Giocatore 2 (opz):"))
+        self.edit_user2 = QLineEdit()
+        self.edit_user2.setPlaceholderText("Es: jirkunow")
+        top_layout.addWidget(self.edit_user2)
 
         top_layout.addWidget(QLabel("Numero Replays:"))
         self.spin_count = QSpinBox()
@@ -131,6 +155,8 @@ class MassImportWidget(QWidget):
     def start_import(self):
         format_id = self.combo_format.currentText().strip()
         count = self.spin_count.value()
+        user = self.edit_user.text().strip()
+        user2 = self.edit_user2.text().strip()
 
         if not format_id:
             QMessageBox.warning(self, "Attenzione", "Inserisci un formato valido!")
@@ -139,13 +165,15 @@ class MassImportWidget(QWidget):
         self.btn_start.setEnabled(False)
         self.combo_format.setEnabled(False)
         self.spin_count.setEnabled(False)
+        self.edit_user.setEnabled(False)
+        self.edit_user2.setEnabled(False)
         
         self.progress_bar.setMaximum(count)
         self.progress_bar.setValue(0)
         self.log_console.clear()
-        self.log_console.append(f"Inizio operazione: Formato '{format_id}', Quantità {count}")
+        self.log_console.append(f"Inizio operazione: Formato '{format_id}', Giocatore 1 '{user}', Giocatore 2 '{user2}', Quantità {count}")
 
-        self.worker = MassImportWorker(format_id, count)
+        self.worker = MassImportWorker(format_id, count, user, user2)
         self.worker.progress.connect(self.update_progress)
         self.worker.finished.connect(self.import_finished)
         self.worker.error.connect(self.import_error)
@@ -159,6 +187,8 @@ class MassImportWidget(QWidget):
         self.btn_start.setEnabled(True)
         self.combo_format.setEnabled(True)
         self.spin_count.setEnabled(True)
+        self.edit_user.setEnabled(True)
+        self.edit_user2.setEnabled(True)
         QMessageBox.information(self, "Successo", "Importazione multipla completata!")
         if self.parent_main and hasattr(self.parent_main, 'list_view'):
             self.parent_main.list_view.load_replays()
@@ -167,4 +197,6 @@ class MassImportWidget(QWidget):
         self.btn_start.setEnabled(True)
         self.combo_format.setEnabled(True)
         self.spin_count.setEnabled(True)
+        self.edit_user.setEnabled(True)
+        self.edit_user2.setEnabled(True)
         QMessageBox.critical(self, "Errore", f"Errore durante l'importazione:\n{error_msg}")

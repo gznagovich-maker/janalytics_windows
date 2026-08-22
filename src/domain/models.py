@@ -65,4 +65,5 @@ class Match:
     format: str = "Unknown"
     players: Dict[str, Player] = field(default_factory=dict)
     global_state: MatchState = field(default_factory=MatchState)
+    winner_name: Optional[str] = None
     turns: Dict[int, List['TurnAction']] = field(default_factory=dict)

@@ -28,8 +28,8 @@ def get_all_matches():
     finally:
         session.close()
 
-def search_matches(query_text: str = "", player_filter: str = "", species_filter: str = "") -> List[Dict[str, Any]]:
-    """Recupera i match filtrati per ID/Nome, Giocatore o Specie Pokémon."""
+def search_matches(query_text: str = "", player_filter: str = "", species_filter: str = "", limit: int = 20, offset: int = 0) -> tuple[List[Dict[str, Any]], int]:
+    """Recupera i match filtrati per ID/Nome, Giocatore o Specie Pokémon con paginazione."""
     session = SessionLocal()
     try:
         q = session.query(Match)
@@ -45,7 +45,9 @@ def search_matches(query_text: str = "", player_filter: str = "", species_filter
                 Team.pokemon_builds.any(PokemonBuild.species_id.ilike(f"%{species_filter}%"))
             ))
 
-        matches = q.all()
+        total_count = q.count()
+        matches = q.offset(offset).limit(limit).all()
+        
         results = []
         for m in matches:
             p1 = next((t.trainer_id for t in m.teams if t.player_slot == "p1"), "P1 Sconosciuto")
@@ -62,7 +64,7 @@ def search_matches(query_text: str = "", player_filter: str = "", species_filter
                 "p2_team": ", ".join(p2_team),
                 "turns_count": len(m.turns)
             })
-        return results
+        return results, total_count
     finally:
         session.close()
 
@@ -146,6 +148,8 @@ def save_parsed_match_to_db(parsed_match, match_id_str: str):
     try:
         print("-> [REPO] Avvio salvataggio match nel DB...")
         db_match = Match(id=match_id_str, format=parsed_match.format)
+        if getattr(parsed_match, "winner_name", None) and parsed_match.winner_name != 'tie':
+            db_match.winner_id = parsed_match.winner_name
         session.add(db_match)
 
         poke_tracking = {}
@@ -281,6 +285,22 @@ def delete_match(match_id: str) -> bool:
     except Exception as e:
         session.rollback()
         print(f"Errore durante l'eliminazione del match {match_id}: {e}")
+        return False
+    finally:
+        session.close()
+
+def clear_all_matches() -> bool:
+    """Elimina tutti i match e le relative dipendenze dal database."""
+    session = SessionLocal()
+    try:
+        matches = session.query(Match).all()
+        for match in matches:
+            session.delete(match)
+        session.commit()
+        return True
+    except Exception as e:
+        session.rollback()
+        print(f"Errore durante l'eliminazione di tutti i match: {e}")
         return False
     finally:
         session.close()

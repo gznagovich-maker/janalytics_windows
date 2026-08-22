@@ -3,647 +3,1017 @@ import json
 import urllib.request
 import copy
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, 
-    QSplitter, QFrame, QLabel, QListWidget, QListView,
-    QListWidgetItem, QPushButton, QTextBrowser, QTreeWidget, QTreeWidgetItem
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
+    QSplitter, QFrame, QLabel, QListWidget,
+    QListWidgetItem, QPushButton, QTextBrowser, QTreeWidget, QTreeWidgetItem,
+    QTabWidget
 )
 from PySide6.QtCore import Qt, Signal, QUrl
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QColor, QPixmap
 from database.repository import get_match_details
 
+import matplotlib
+matplotlib.use('qtagg')
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
+from src.domain.replay_analytics_service import ReplayAnalyticsService
+
+# ──────────────────────────────────────────────────────────────────────────────
+# COSTANTI TAG → UI
+# ──────────────────────────────────────────────────────────────────────────────
+
+WEATHER_BG = {
+    "SunnyDay":   "#3d1a00",
+    "RainDance":  "#001933",
+    "Snow":       "#1a2a3d",
+    "Snowscape":  "#1a2a3d",
+    "Hail":       "#1a2a3d",
+    "Sandstorm":  "#3d2800",
+    "PrimordialSea":    "#001440",
+    "DesolateLand":     "#4d1f00",
+    "StrongWinds":      "#1a1a2e",
+}
+WEATHER_ICON = {
+    "SunnyDay":   "☀️ Sole",
+    "RainDance":  "🌧️ Pioggia",
+    "Snow":       "❄️ Neve",
+    "Snowscape":  "❄️ Bufera di neve",
+    "Hail":       "🧊 Grandine",
+    "Sandstorm":  "🌪️ Tempesta di Sabbia",
+    "PrimordialSea":   "🌊 Mare Primordiale",
+    "DesolateLand":    "🌋 Terra Desolata",
+    "StrongWinds":     "💨 Turbolenza",
+}
+TERRAIN_BG = {
+    "electricterrain": "#1a1a00",
+    "grassyterrain":   "#001a00",
+    "mistyterrain":    "#1a001a",
+    "psychicterrain":  "#0d000d",
+}
+TERRAIN_ICON = {
+    "electricterrain": "⚡ Terreno Elettrico",
+    "grassyterrain":   "🌿 Terreno Erboso",
+    "mistyterrain":    "🌸 Terreno Nibbioso",
+    "psychicterrain":  "🔮 Terreno Psichico",
+}
+STATUS_COLORS = {
+    "brn": "#c0392b", "par": "#f1c40f", "slp": "#7f8c8d",
+    "frz": "#2980b9", "psn": "#8e44ad", "tox": "#6c3483",
+}
+STATUS_LABELS = {
+    "brn": "BRN 🔥", "par": "PAR ⚡", "slp": "SLP 💤",
+    "frz": "FRZ 🧊", "psn": "PSN ☠️", "tox": "TOX ☠️",
+}
+STAT_NAMES = {
+    "atk": "Attacco", "def": "Difesa", "spa": "Att.Sp.",
+    "spd": "Dif.Sp.", "spe": "Velocità", "acc": "Precisione", "eva": "Elusione",
+}
+ACTION_ICONS = {
+    "move":   "⚔️",
+    "switch": "🔄",
+    "cant":   "🚫",
+    "faint":  "💀",
+}
+
+
 def get_pokemon_icon_path(species_name):
-    if not species_name or species_name == "Vuoto":
+    if not species_name or species_name in ("Vuoto", ""):
         return None
-        
     name = species_name.lower().replace(" ", "").replace("-", "")
     icon_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "assets", "icons"))
     os.makedirs(icon_dir, exist_ok=True)
     icon_path = os.path.join(icon_dir, f"{name}.png")
-    
     if not os.path.exists(icon_path):
         url = f"https://play.pokemonshowdown.com/sprites/dex/{name}.png"
         try:
-            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req, timeout=3) as response:
-                with open(icon_path, 'wb') as f:
-                    f.write(response.read())
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=3) as r:
+                with open(icon_path, "wb") as f:
+                    f.write(r.read())
         except Exception as e:
-            print(f"Failed to download sprite for {name}: {e}")
+            print(f"[sprite] {name}: {e}")
             return None
-            
     return icon_path.replace("\\", "/")
 
+
+# ──────────────────────────────────────────────────────────────────────────────
 class ReplayAnalyzerUI(QWidget):
     back_requested = Signal()
-    link_clicked = Signal(str) # For future compatibility
+    link_clicked = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Replay Analyzer")
-        
         self.match_data = {}
-        
         self.setup_ui()
         self.setup_connections()
 
+    # ── SETUP UI ──────────────────────────────────────────────────────────────
+
     def setup_ui(self):
         self.main_layout = QVBoxLayout(self)
+        self.main_layout.setSpacing(4)
+        self.main_layout.setContentsMargins(6, 6, 6, 6)
 
-        # ==========================================
-        # TOP BAR
-        # ==========================================
-        self.top_bar_layout = QHBoxLayout()
-        self.lbl_nome_battaglia = QLabel("NomeBattagliaEFormato")
-        self.lbl_nome_battaglia.setStyleSheet("font-size: 20px; font-weight: bold; color: #ffcc00;")
-        
-        self.nav_bar = QFrame()
-        self.nav_bar_layout = QHBoxLayout(self.nav_bar)
-        self.nav_bar_layout.setContentsMargins(0, 0, 0, 0)
-        
+        # Top bar
+        top = QHBoxLayout()
+        self.lbl_nome_battaglia = QLabel("Nessun match selezionato")
+        self.lbl_nome_battaglia.setStyleSheet("font-size: 18px; font-weight: bold; color: #B6FAF5;")
         self.btn_back = QPushButton("🔙 Indietro")
         self.btn_back.clicked.connect(self.back_requested.emit)
-        self.nav_bar_layout.addWidget(self.btn_back)
-        self.nav_bar_layout.addStretch()
-        
-        self.top_bar_layout.addWidget(self.lbl_nome_battaglia)
-        self.top_bar_layout.addWidget(self.nav_bar)
-        self.top_bar_layout.setStretch(1, 1)  
-        self.main_layout.addLayout(self.top_bar_layout)
+        top.addWidget(self.lbl_nome_battaglia, 1)
+        top.addWidget(self.btn_back)
+        self.main_layout.addLayout(top)
 
-        # ==========================================
-        # MIDDLE SECTION
-        # ==========================================
-        self.middle_section_layout = QHBoxLayout()
-
-        # --- Left: Player 1 Area ---
+        # Middle (team panels)
+        mid = QHBoxLayout()
         self.p1_area_layout = QVBoxLayout()
-        self.lbl_p1_info = QLabel("P1 Info")
-        self.lbl_p1_info.setStyleSheet("font-weight: bold; color: #3498db;")
+        self.lbl_p1_info = QLabel("Giocatore 1")
+        self.lbl_p1_info.setStyleSheet("font-weight: bold; color: #467A77;")
         self.p1_area_layout.addWidget(self.lbl_p1_info)
-        
-        self.p1_frames_layout = QHBoxLayout() 
-        
+        p1_frames = QHBoxLayout()
         self.frame_img_p1 = QLabel()
         self.frame_img_p1.setAlignment(Qt.AlignCenter)
-        self.frame_img_p1.setStyleSheet("background-color: #222; border: 1px solid #444; border-radius: 4px;")
-        self.frame_img_p1.setFixedSize(120, 120)
-        
+        self.frame_img_p1.setStyleSheet("background:#0A0A0A; border:1px solid #333; border-radius:4px;")
+        self.frame_img_p1.setFixedSize(100, 100)
         self.frame_dati_p1 = QFrame()
         self.frame_dati_p1.setFrameShape(QFrame.StyledPanel)
-        self.layout_dati_p1 = QVBoxLayout(self.frame_dati_p1)
         self.lbl_dati_p1 = QLabel("Seleziona un Pokémon")
         self.lbl_dati_p1.setWordWrap(True)
-        self.layout_dati_p1.addWidget(self.lbl_dati_p1)
-        
-        self.p1_frames_layout.addWidget(self.frame_img_p1)
-        self.p1_frames_layout.addWidget(self.frame_dati_p1)
-        
+        self.lbl_dati_p1.setTextFormat(Qt.RichText)
+        QVBoxLayout(self.frame_dati_p1).addWidget(self.lbl_dati_p1)
+        p1_frames.addWidget(self.frame_img_p1)
+        p1_frames.addWidget(self.frame_dati_p1)
         self.list_widget_p1 = QListWidget()
-        
-        self.p1_area_layout.addLayout(self.p1_frames_layout)
+        self.list_widget_p1.setMaximumHeight(100)
+        self.p1_area_layout.addLayout(p1_frames)
         self.p1_area_layout.addWidget(self.list_widget_p1)
 
-        # --- Right: Player 2 Area ---
         self.p2_area_layout = QVBoxLayout()
-        self.lbl_p2_info = QLabel("P2 Info")
-        self.lbl_p2_info.setStyleSheet("font-weight: bold; color: #e74c3c;")
+        self.lbl_p2_info = QLabel("Giocatore 2")
+        self.lbl_p2_info.setStyleSheet("font-weight: bold; color: #B6FAF5;")
         self.p2_area_layout.addWidget(self.lbl_p2_info)
-        
-        self.p2_frames_layout = QHBoxLayout()
-        
+        p2_frames = QHBoxLayout()
         self.frame_dati_p2 = QFrame()
         self.frame_dati_p2.setFrameShape(QFrame.StyledPanel)
-        self.layout_dati_p2 = QVBoxLayout(self.frame_dati_p2)
         self.lbl_dati_p2 = QLabel("Seleziona un Pokémon")
         self.lbl_dati_p2.setWordWrap(True)
-        self.layout_dati_p2.addWidget(self.lbl_dati_p2)
-        
+        self.lbl_dati_p2.setTextFormat(Qt.RichText)
+        QVBoxLayout(self.frame_dati_p2).addWidget(self.lbl_dati_p2)
         self.frame_img_p2 = QLabel()
         self.frame_img_p2.setAlignment(Qt.AlignCenter)
-        self.frame_img_p2.setStyleSheet("background-color: #222; border: 1px solid #444; border-radius: 4px;")
-        self.frame_img_p2.setFixedSize(120, 120)
-        
-        self.p2_frames_layout.addWidget(self.frame_dati_p2)
-        self.p2_frames_layout.addWidget(self.frame_img_p2)
-        
+        self.frame_img_p2.setStyleSheet("background:#0A0A0A; border:1px solid #333; border-radius:4px;")
+        self.frame_img_p2.setFixedSize(100, 100)
+        p2_frames.addWidget(self.frame_dati_p2)
+        p2_frames.addWidget(self.frame_img_p2)
         self.list_widget_p2 = QListWidget()
-        
-        self.p2_area_layout.addLayout(self.p2_frames_layout)
+        self.list_widget_p2.setMaximumHeight(100)
+        self.p2_area_layout.addLayout(p2_frames)
         self.p2_area_layout.addWidget(self.list_widget_p2)
 
-        self.middle_section_layout.addLayout(self.p1_area_layout)
-        self.middle_section_layout.addLayout(self.p2_area_layout)
-        self.main_layout.addLayout(self.middle_section_layout)
+        mid.addLayout(self.p1_area_layout)
+        mid.addLayout(self.p2_area_layout)
+        self.main_layout.addLayout(mid)
 
-        # ==========================================
-        # BOTTOM SECTION (QSplitter)
-        # ==========================================
+        # Bottom tabs
+        self.bottom_tabs = QTabWidget()
+        self.main_layout.addWidget(self.bottom_tabs, 1)
+
+        # Prima tab: Event Log e Board
+        self.tab_log = QWidget()
+        tab_log_lay = QVBoxLayout(self.tab_log)
+        tab_log_lay.setContentsMargins(0,0,0,0)
+
+        # Bottom splitter (dentro tab 1)
         self.bottom_splitter = QSplitter(Qt.Horizontal)
 
-        # --- Left Pane (Turns and Actions) ---
-        self.left_pane_widget = QWidget()
-        self.left_pane_layout = QVBoxLayout(self.left_pane_widget)
-        self.left_pane_layout.setContentsMargins(0, 0, 0, 0)
-        
-        self.left_pane_layout.addWidget(QLabel("Turni:"))
+        # Left pane: Turns + Actions
+        left_w = QWidget()
+        left_lay = QVBoxLayout(left_w)
+        left_lay.setContentsMargins(0, 0, 0, 0)
+        left_lay.addWidget(QLabel("Turni:"))
         self.list_widget_turni = QListWidget()
-        self.left_pane_layout.addWidget(self.list_widget_turni)
-        
-        self.left_pane_layout.addWidget(QLabel("Azioni nel Turno:"))
+        left_lay.addWidget(self.list_widget_turni)
+        left_lay.addWidget(QLabel("Azioni nel Turno:"))
         self.list_widget_azioni = QListWidget()
-        self.left_pane_layout.addWidget(self.list_widget_azioni)
+        left_lay.addWidget(self.list_widget_azioni)
 
-        # --- Center Pane (Board State) ---
-        self.center_pane_widget = QWidget()
-        self.center_pane_layout = QVBoxLayout(self.center_pane_widget)
-        self.center_pane_layout.setContentsMargins(0, 0, 0, 0)
-        
+        # Center pane: Board + Conditions
+        center_w = QWidget()
+        center_lay = QVBoxLayout(center_w)
+        center_lay.setContentsMargins(0, 0, 0, 0)
         self.frame_pokemon_in_campo = QFrame()
         self.frame_pokemon_in_campo.setFrameShape(QFrame.StyledPanel)
+        self.frame_pokemon_in_campo.setStyleSheet(
+            "background:#141414; border:1px solid #333; border-radius:8px;")
         self.pokemon_grid = QGridLayout(self.frame_pokemon_in_campo)
-        
-        self.lbl_p1a = QLabel("P1a<br>(Vuoto)")
-        self.lbl_p1b = QLabel("P1b<br>(Vuoto)")
-        self.lbl_p2a = QLabel("P2a<br>(Vuoto)")
-        self.lbl_p2b = QLabel("P2b<br>(Vuoto)")
-        
-        # Stili pastello differenziati e testi centrati (semi-trasparenti per far vedere il meteo)
-        p1_style = "background-color: rgba(212, 230, 241, 150); color: #1a5276; border: 2px solid #5499c7; border-radius: 8px; padding: 10px;"
-        p2_style = "background-color: rgba(250, 219, 216, 150); color: #78281f; border: 2px solid #cd6155; border-radius: 8px; padding: 10px;"
-        
+        self.pokemon_grid.setSpacing(6)
+        self.lbl_p1a = QLabel("P1a<br><i>(Vuoto)</i>")
+        self.lbl_p1b = QLabel("P1b<br><i>(Vuoto)</i>")
+        self.lbl_p2a = QLabel("P2a<br><i>(Vuoto)</i>")
+        self.lbl_p2b = QLabel("P2b<br><i>(Vuoto)</i>")
+        p1_style = ("background:rgba(70,122,119,0.1);color:#467A77;"
+                    "border:1px solid #467A77;border-radius:6px;padding:8px;")
+        p2_style = ("background:rgba(182,250,245,0.1);color:#B6FAF5;"
+                    "border:1px solid #B6FAF5;border-radius:6px;padding:8px;")
         for lbl in (self.lbl_p1a, self.lbl_p1b):
             lbl.setAlignment(Qt.AlignCenter)
             lbl.setStyleSheet(p1_style)
             lbl.setTextFormat(Qt.RichText)
-            
         for lbl in (self.lbl_p2a, self.lbl_p2b):
             lbl.setAlignment(Qt.AlignCenter)
             lbl.setStyleSheet(p2_style)
             lbl.setTextFormat(Qt.RichText)
-            
-        # P1a sopra P1b (Colonna 0) / P2a sopra P2b (Colonna 1)
-        self.pokemon_grid.addWidget(self.lbl_p1a, 0, 0)
-        self.pokemon_grid.addWidget(self.lbl_p1b, 1, 0)
-        self.pokemon_grid.addWidget(self.lbl_p2a, 0, 1)
-        self.pokemon_grid.addWidget(self.lbl_p2b, 1, 1)
+        # P2 on top (opponent), P1 on bottom (player)
+        self.pokemon_grid.addWidget(self.lbl_p2a, 0, 0)
+        self.pokemon_grid.addWidget(self.lbl_p2b, 0, 1)
+        self.pokemon_grid.addWidget(self.lbl_p1a, 1, 0)
+        self.pokemon_grid.addWidget(self.lbl_p1b, 1, 1)
+        center_lay.addWidget(self.frame_pokemon_in_campo, 3)
 
+        cond_lay = QHBoxLayout()
+        p1c = QVBoxLayout()
+        p1c.addWidget(QLabel("Cond. P1:"))
         self.list_condizioni_p1 = QListWidget()
+        self.list_condizioni_p1.setMaximumHeight(90)
+        p1c.addWidget(self.list_condizioni_p1)
+        gc = QVBoxLayout()
+        gc.addWidget(QLabel("Globali:"))
         self.list_condizioni_generali = QListWidget()
+        self.list_condizioni_generali.setMaximumHeight(90)
+        gc.addWidget(self.list_condizioni_generali)
+        p2c = QVBoxLayout()
+        p2c.addWidget(QLabel("Cond. P2:"))
         self.list_condizioni_p2 = QListWidget()
-        
-        cond_layout = QHBoxLayout()
-        
-        p1_cond_layout = QVBoxLayout()
-        p1_cond_layout.addWidget(QLabel("Cond. P1:"))
-        p1_cond_layout.addWidget(self.list_condizioni_p1)
-        
-        gen_cond_layout = QVBoxLayout()
-        gen_cond_layout.addWidget(QLabel("Globali:"))
-        gen_cond_layout.addWidget(self.list_condizioni_generali)
-        
-        p2_cond_layout = QVBoxLayout()
-        p2_cond_layout.addWidget(QLabel("Cond. P2:"))
-        p2_cond_layout.addWidget(self.list_condizioni_p2)
-        
-        cond_layout.addLayout(p1_cond_layout)
-        cond_layout.addLayout(gen_cond_layout)
-        cond_layout.addLayout(p2_cond_layout)
-        
-        self.center_pane_layout.addWidget(self.frame_pokemon_in_campo)
-        self.center_pane_layout.addLayout(cond_layout)
+        self.list_condizioni_p2.setMaximumHeight(90)
+        p2c.addWidget(self.list_condizioni_p2)
+        cond_lay.addLayout(p1c)
+        cond_lay.addLayout(gc)
+        cond_lay.addLayout(p2c)
+        center_lay.addLayout(cond_lay, 1)
 
-        # --- Right Pane (Action Details) ---
-        self.right_pane_widget = QWidget()
-        self.right_pane_layout = QVBoxLayout(self.right_pane_widget)
-        self.right_pane_layout.setContentsMargins(0, 0, 0, 0)
-        
-        self.right_pane_layout.addWidget(QLabel("Attributi Azione:"))
+        # Right pane
+        right_w = QWidget()
+        right_lay = QVBoxLayout(right_w)
+        right_lay.setContentsMargins(0, 0, 0, 0)
+        right_lay.addWidget(QLabel("Attributi Azione:"))
         self.txt_attr = QTextBrowser()
         self.txt_attr.setOpenExternalLinks(False)
         self.txt_attr.anchorClicked.connect(self.on_txt_state_anchor_clicked)
-        self.right_pane_layout.addWidget(self.txt_attr)
-        
-        self.right_pane_layout.addWidget(QLabel("Tags (Dati Tecnici):"))
+        right_lay.addWidget(self.txt_attr, 2)
+        right_lay.addWidget(QLabel("Tags (Dati Tecnici):"))
         self.tree_widget_tags = QTreeWidget()
         self.tree_widget_tags.setHeaderHidden(True)
-        self.right_pane_layout.addWidget(self.tree_widget_tags)
+        right_lay.addWidget(self.tree_widget_tags, 3)
 
-        self.bottom_splitter.addWidget(self.left_pane_widget)
-        self.bottom_splitter.addWidget(self.center_pane_widget)
-        self.bottom_splitter.addWidget(self.right_pane_widget)
-        self.bottom_splitter.setSizes([250, 350, 250])
+        self.bottom_splitter.addWidget(left_w)
+        self.bottom_splitter.addWidget(center_w)
+        self.bottom_splitter.addWidget(right_w)
+        self.bottom_splitter.setSizes([260, 380, 300])
+        tab_log_lay.addWidget(self.bottom_splitter)
+        self.bottom_tabs.addTab(self.tab_log, "Log / Eventi")
 
-        self.main_layout.addWidget(self.bottom_splitter)
-        self.main_layout.setStretch(1, 2)
-        self.main_layout.setStretch(2, 3)
-
-    # ==========================================
-    # DATA BINDING AND EVENTS
-    # ==========================================
-    
-    def setup_connections(self):
-        self.list_widget_turni.currentItemChanged.connect(lambda curr, prev: self.on_turn_clicked(curr) if curr else None)
-        self.list_widget_azioni.currentItemChanged.connect(lambda curr, prev: self.on_action_clicked(curr) if curr else None)
-        self.list_widget_p1.itemClicked.connect(self.on_p1_pokemon_clicked)
-        self.list_widget_p2.itemClicked.connect(self.on_p2_pokemon_clicked)
+        # Seconda tab: Grafici & Metriche
+        self.tab_grafici = QWidget()
+        tab_grafici_lay = QVBoxLayout(self.tab_grafici)
         
-        # Also keep itemClicked as fallback for mouse clicks
+        lbl_spiegazione = QLabel(
+            "<b>Snapshot di Stato (Differenziale HP Ponderato)</b>: Indica il vantaggio in salute pesato per i boost.<br>"
+            "<i>Esempio</i>: Un Pokémon a 50% HP con +2 in Attacco conta di più di uno a 50% senza boost, riflettendo la pericolosità.<br><br>"
+            "<b>Indice di Vantaggio (Momentum)</b>: Funzione euristica che somma Differenziale HP, vantaggio velocità e posizionamento.<br>"
+            "<i>Esempio</i>: Un valore positivo indica che il Giocatore 1 ha il controllo tattico della scacchiera."
+        )
+        lbl_spiegazione.setWordWrap(True)
+        lbl_spiegazione.setStyleSheet("background-color: #1a1a1a; padding: 10px; border-radius: 5px;")
+        tab_grafici_lay.addWidget(lbl_spiegazione)
+
+        self.figure = Figure(figsize=(8, 4), facecolor='#121212')
+        self.canvas = FigureCanvas(self.figure)
+        tab_grafici_lay.addWidget(self.canvas)
+        self.bottom_tabs.addTab(self.tab_grafici, "Grafici & Metriche")
+
+    # ── CONNECTIONS ───────────────────────────────────────────────────────────
+
+    def setup_connections(self):
+        self.list_widget_turni.currentItemChanged.connect(
+            lambda curr, prev: self.on_turn_clicked(curr) if curr else None)
+        self.list_widget_azioni.currentItemChanged.connect(
+            lambda curr, prev: self.on_action_clicked(curr) if curr else None)
         self.list_widget_turni.itemClicked.connect(self.on_turn_clicked)
         self.list_widget_azioni.itemClicked.connect(self.on_action_clicked)
-        
+        self.list_widget_p1.itemClicked.connect(self.on_p1_pokemon_clicked)
+        self.list_widget_p2.itemClicked.connect(self.on_p2_pokemon_clicked)
+
     def on_txt_state_anchor_clicked(self, url: QUrl):
         self.link_clicked.emit(url.toString())
 
+    # ── DISPLAY MATCH ─────────────────────────────────────────────────────────
+
     def display_match(self, match_id: str):
         self.match_data = get_match_details(match_id)
-        
         if not self.match_data:
             return
-
         fmt = self.match_data.get("format", "Regolamento Sconosciuto")
         self.lbl_nome_battaglia.setText(f"Match: {match_id} | {fmt}")
-
+        # Reset BEFORE populating so auto-select in populate_turns is not wiped
+        self._reset_panels()
         self.populate_teams(self.match_data)
         self.populate_turns(self.match_data)
+        self.update_graphs(self.match_data)
+
+    def update_graphs(self, match_data: dict):
+        service = ReplayAnalyticsService(match_data)
+        series = service.generate_turn_series()
         
+        self.figure.clear()
+        
+        ax1 = self.figure.add_subplot(211)
+        ax1.set_facecolor('#121212')
+        ax1.tick_params(colors='white')
+        for spine in ax1.spines.values(): spine.set_color('#333333')
+        
+        ax1.plot(series["turns"], series["delta_hp"], marker='o', color='#B6FAF5', label='ΔHP Ponderato')
+        ax1.set_title("Snapshot di Stato (Vantaggio HP P1)", color='white')
+        ax1.axhline(0, color='gray', linestyle='--')
+        ax1.legend(loc='best', facecolor='#121212', edgecolor='#333333', labelcolor='white')
+        
+        ax2 = self.figure.add_subplot(212)
+        ax2.set_facecolor('#121212')
+        ax2.tick_params(colors='white')
+        for spine in ax2.spines.values(): spine.set_color('#333333')
+        
+        ax2.bar(series["turns"], series["momentum"], color=['#467A77' if m > 0 else '#8c3b3b' for m in series["momentum"]])
+        ax2.set_title("Indice di Vantaggio (Momentum P1)", color='white')
+        ax2.axhline(0, color='gray', linestyle='--')
+        
+        self.figure.tight_layout()
+        self.canvas.draw()
+
+    def _reset_panels(self):
         self.list_widget_azioni.clear()
         self.txt_attr.clear()
         self.tree_widget_tags.clear()
-        self.lbl_p1a.setText("P1a<br>(Vuoto)")
-        self.lbl_p1b.setText("P1b<br>(Vuoto)")
-        self.lbl_p2a.setText("P2a<br>(Vuoto)")
-        self.lbl_p2b.setText("P2b<br>(Vuoto)")
+        for lbl, txt in ((self.lbl_p1a, "P1a"), (self.lbl_p1b, "P1b"),
+                         (self.lbl_p2a, "P2a"), (self.lbl_p2b, "P2b")):
+            lbl.setText(f"<b>{txt}</b><br><i>(Vuoto)</i>")
         self.list_condizioni_p1.clear()
         self.list_condizioni_generali.clear()
         self.list_condizioni_p2.clear()
-        self.lbl_dati_p1.setText("Seleziona un Pokémon")
-        self.lbl_dati_p2.setText("Seleziona un Pokémon")
-        self.frame_img_p1.clear()
-        self.frame_img_p2.clear()
+
+    # ── TEAM ──────────────────────────────────────────────────────────────────
 
     def populate_teams(self, match_data: dict):
         self.list_widget_p1.clear()
         self.list_widget_p2.clear()
-
         teams = match_data.get("teams", {})
-        
-        p1_trainer = teams.get("p1", {}).get("trainer", "Sconosciuto")
-        p1_rating = teams.get("p1", {}).get("rating", "N/A")
-        self.lbl_p1_info.setText(f"Allenatore: {p1_trainer} | Rating: {p1_rating}")
-        
-        p2_trainer = teams.get("p2", {}).get("trainer", "Sconosciuto")
-        p2_rating = teams.get("p2", {}).get("rating", "N/A")
-        self.lbl_p2_info.setText(f"Allenatore: {p2_trainer} | Rating: {p2_rating}")
-        
-        for pokemon in teams.get("p1", {}).get("pokemon", []):
-            name = pokemon.get("species", "Unknown") if isinstance(pokemon, dict) else str(pokemon)
-            item = QListWidgetItem(name)
-            item.setData(Qt.UserRole, pokemon)
-            self.list_widget_p1.addItem(item)
-
-        for pokemon in teams.get("p2", {}).get("pokemon", []):
-            name = pokemon.get("species", "Unknown") if isinstance(pokemon, dict) else str(pokemon)
-            item = QListWidgetItem(name)
-            item.setData(Qt.UserRole, pokemon)
-            self.list_widget_p2.addItem(item)
-
-        if self.list_widget_p1.count() > 0:
+        p1 = teams.get("p1", {})
+        p2 = teams.get("p2", {})
+        self.lbl_p1_info.setText(
+            f"Allenatore: {p1.get('trainer','?')} | ELO: {p1.get('rating','N/A')}")
+        self.lbl_p2_info.setText(
+            f"Allenatore: {p2.get('trainer','?')} | ELO: {p2.get('rating','N/A')}")
+        for poke in p1.get("pokemon", []):
+            it = QListWidgetItem(poke.get("species", "?") if isinstance(poke, dict) else str(poke))
+            it.setData(Qt.UserRole, poke)
+            self.list_widget_p1.addItem(it)
+        for poke in p2.get("pokemon", []):
+            it = QListWidgetItem(poke.get("species", "?") if isinstance(poke, dict) else str(poke))
+            it.setData(Qt.UserRole, poke)
+            self.list_widget_p2.addItem(it)
+        if self.list_widget_p1.count():
             self.list_widget_p1.setCurrentRow(0)
             self.on_p1_pokemon_clicked(self.list_widget_p1.item(0))
-            
-        if self.list_widget_p2.count() > 0:
+        if self.list_widget_p2.count():
             self.list_widget_p2.setCurrentRow(0)
             self.on_p2_pokemon_clicked(self.list_widget_p2.item(0))
+
+    # ── TAG HELPERS ───────────────────────────────────────────────────────────
+
+    def _get_tags(self, act: dict) -> dict:
+        """Return tags dict from action, keys lowercased.
+        DB stores: {"damage": [["p1a: Ttar", "200/350"], ...], "weather": [["SunnyDay", "[from] ability: Drought", "[of] p1a: Char"]]}
+        No re-splitting needed."""
+        tags = act.get("tags", {})
+        if not tags:
+            return {}
+        if isinstance(tags, str):
+            try:
+                tags = json.loads(tags)
+            except Exception:
+                return {}
+        if not isinstance(tags, dict):
+            return {}
+        return {str(k).lower(): v for k, v in tags.items()}
+
+    def _get_events(self, tags: dict, key: str) -> list:
+        """Return list of events for a tag key. Each event is a list[str].
+        DB format already has nested lists, e.g. [["p1a: Ttar", "200/350"], ...]"""
+        raw = tags.get(key, [])
+        if not raw or not isinstance(raw, list):
+            return []
+        result = []
+        for ev in raw:
+            if isinstance(ev, list):
+                result.append([str(x) for x in ev])
+            elif isinstance(ev, str):
+                result.append([ev])
+        return result
+
+    def _slot_key(self, ev_field: str) -> str:
+        """Extract 'p1a' from 'p1a: Tyranitar'."""
+        return ev_field.split(":")[0].strip()
+
+    def _b_id(self, slot_key: str, board: dict):
+        """Return build_id from board_state given slot key like 'p1a'."""
+        slot_info = board.get(slot_key, {})
+        return slot_info.get("id") if isinstance(slot_info, dict) else None
+
+    # ── POPULATE TURNS (EVENT SOURCING) ───────────────────────────────────────
 
     def populate_turns(self, match_data: dict):
         self.list_widget_turni.clear()
         self.list_widget_azioni.clear()
-        
-        self.current_hp = {}
-        self.current_status = {}
-        current_weather = None
-        
-        for turn in match_data.get("turns", []):
-            turn_num = turn.get("turn_number", "?") if isinstance(turn, dict) else str(turn)
-            
-            # Condizioni Meteo / Tailwind ecc
-            conds = []
-            if turn.get("trick_room"): conds.append("Trick Room")
-            if turn.get("p1_tailwind"): conds.append("Tailwind P1")
-            if turn.get("p2_tailwind"): conds.append("Tailwind P2")
-            if turn.get("weather"): conds.append(f"Clima: {turn['weather']}")
-            
-            cond_str = f" [{', '.join(conds)}]" if conds else ""
-            
-            item = QListWidgetItem(f"Turno {turn_num}{cond_str}")
-            item.setData(Qt.UserRole, turn)
-            self.list_widget_turni.addItem(item)
-            
-            # Simulated state pass for this turn's actions
-            actions = turn.get("actions", [])
-            for act in actions:
-                tags_dict = act.get("tags", {})
-                if isinstance(tags_dict, str):
-                    try:
-                        tags_dict = json.loads(tags_dict)
-                    except:
-                        tags_dict = {}
-                
-                try:
-                    tags_dict_lower = {}
-                    for k, v in tags_dict.items():
-                        parsed_v = []
-                        if isinstance(v, list):
-                            for item in v:
-                                if isinstance(item, str) and " | " in item:
-                                    parsed_v.append(item.split(" | "))
-                                elif isinstance(item, str):
-                                    parsed_v.append([item])
-                                else:
-                                    parsed_v.append(item)
-                        elif isinstance(v, str):
-                            parsed_v = [v.split(" | ")]
-                        else:
-                            parsed_v = v
-                        tags_dict_lower[str(k).lower()] = parsed_v
-    
-                    # WEATHER FROM TURN
-                    turn_weather = turn.get("weather")
-                    if turn_weather and turn_weather != "none":
-                        current_weather = turn_weather
-                    elif turn_weather == "none":
-                        current_weather = None
-                    elif "weather" in tags_dict_lower:
-                        w_list = tags_dict_lower["weather"]
-                        if w_list and isinstance(w_list, list):
-                            w_event = w_list[0] if isinstance(w_list[0], list) else w_list
-                            if len(w_event) > 0:
-                                weather_val = str(w_event[0]).strip()
-                                if weather_val != "none" and not weather_val.startswith("["):
-                                    current_weather = weather_val
-                                elif weather_val == "none":
-                                    current_weather = None
-    
-                    for dmg_key in ["damage", "heal"]:
-                        if dmg_key in tags_dict_lower:
-                            dmg_list = tags_dict_lower[dmg_key]
-                            if not dmg_list or not isinstance(dmg_list, list): continue
-                            if not isinstance(dmg_list[0], list): dmg_list = [dmg_list]
-                            for event in dmg_list:
-                                if len(event) >= 2:
-                                    slot_str = str(event[0]).split(":")[0].strip()
-                                    hp_val = str(event[1]).strip()
-                                    b_id = act.get("board_state", {}).get(slot_str, {}).get("id")
-                                    if b_id is not None:
-                                        self.current_hp[b_id] = hp_val
-    
-                    if "status" in tags_dict_lower:
-                        st_list = tags_dict_lower["status"]
-                        if st_list and isinstance(st_list, list):
-                            if not isinstance(st_list[0], list): st_list = [st_list]
-                            for event in st_list:
-                                if len(event) >= 2:
-                                    slot_str = str(event[0]).split(":")[0].strip()
-                                    st_val = str(event[1]).strip()
-                                    b_id = act.get("board_state", {}).get(slot_str, {}).get("id")
-                                    if b_id is not None:
-                                        self.current_status[b_id] = st_val
-                                    
-                    if "curestatus" in tags_dict_lower:
-                        cst_list = tags_dict_lower["curestatus"]
-                        if cst_list and isinstance(cst_list, list):
-                            if not isinstance(cst_list[0], list): cst_list = [cst_list]
-                            for event in cst_list:
-                                if len(event) >= 1:
-                                    slot_str = str(event[0]).split(":")[0].strip()
-                                    b_id = act.get("board_state", {}).get(slot_str, {}).get("id")
-                                    if b_id is not None:
-                                        self.current_status[b_id] = ""
-    
-                    if "faint" in tags_dict_lower:
-                        fnt_list = tags_dict_lower["faint"]
-                        if fnt_list and isinstance(fnt_list, list):
-                            if not isinstance(fnt_list[0], list): fnt_list = [fnt_list]
-                            for event in fnt_list:
-                                if len(event) >= 1:
-                                    slot_str = str(event[0]).split(":")[0].strip()
-                                    b_id = act.get("board_state", {}).get(slot_str, {}).get("id")
-                                    if b_id is not None:
-                                        self.current_hp[b_id] = "0 fnt"
-                                        self.current_status[b_id] = ""
-                except Exception as e:
-                    print(f"Error parsing tags in populate_turns: {e}")
-                
-                act["simulated_state"] = {
-                    "hp": copy.deepcopy(self.current_hp),
-                    "status": copy.deepcopy(self.current_status),
-                    "weather": current_weather
-                }
 
-        if self.list_widget_turni.count() > 0:
+        # Running simulated state across ALL turns/actions in chronological order
+        sim = {
+            "hp":             {},     # {build_id: "cur/max"}
+            "status":         {},     # {build_id: "brn"|"par"|...}
+            "boosts":         {},     # {build_id: {"atk": +1, "spe": -1, ...}}
+            "weather":        None,   # list e.g. ["SunnyDay","[from] ability:...","[of] p1a:..."] or None
+            "terrain":        None,   # list or None
+            "p1_tailwind":    False,
+            "p2_tailwind":    False,
+            "trick_room":     False,
+            "p1_reflect":     False,
+            "p1_lightscreen": False,
+            "p1_auroraveil":  False,
+            "p2_reflect":     False,
+            "p2_lightscreen": False,
+            "p2_auroraveil":  False,
+            "mega":           {},     # {build_id: True}
+            "tera":           {},     # {build_id: type_str}
+            "enditem":        {},     # {build_id: item_str}
+        }
+
+        for turn in match_data.get("turns", []):
+            turn_num = turn.get("turn_number", "?")
+            conds = []
+            if sim["weather"]:
+                wn = sim["weather"][0] if isinstance(sim["weather"], list) else sim["weather"]
+                conds.append(WEATHER_ICON.get(wn, wn))
+            if sim["terrain"]:
+                tn = sim["terrain"][0] if isinstance(sim["terrain"], list) else sim["terrain"]
+                conds.append(TERRAIN_ICON.get(tn.lower(), tn))
+            if sim["trick_room"]:    conds.append("🔁 Trick Room")
+            if sim["p1_tailwind"]:   conds.append("💨 Tailwind P1")
+            if sim["p2_tailwind"]:   conds.append("💨 Tailwind P2")
+            cond_str = f"  [{', '.join(conds)}]" if conds else ""
+            turn_item = QListWidgetItem(f"Turno {turn_num}{cond_str}")
+            turn_item.setData(Qt.UserRole, turn)
+            self.list_widget_turni.addItem(turn_item)
+
+            for act in turn.get("actions", []):
+                tags = self._get_tags(act)
+                board = act.get("board_state", {})
+                try:
+                    # Weather
+                    for ev in self._get_events(tags, "weather"):
+                        if ev:
+                            wname = ev[0].strip()
+                            if wname.lower() == "none":
+                                sim["weather"] = None
+                            elif not wname.startswith("["):
+                                sim["weather"] = ev
+
+                    # Fieldstart / Fieldend (Terrain, Trick Room)
+                    for ev in self._get_events(tags, "fieldstart"):
+                        if ev:
+                            field = ev[0].lower()
+                            if "trickroom" in field or "trick room" in field:
+                                sim["trick_room"] = True
+                            for tk in TERRAIN_ICON:
+                                if tk in field:
+                                    sim["terrain"] = ev
+
+                    for ev in self._get_events(tags, "fieldend"):
+                        if ev:
+                            field = ev[0].lower()
+                            if "trickroom" in field or "trick room" in field:
+                                sim["trick_room"] = False
+                            for tk in TERRAIN_ICON:
+                                if tk in field:
+                                    sim["terrain"] = None
+
+                    # Sidestart / Sideend (Tailwind, Reflect, Light Screen)
+                    # ev[1] examples: "move: Tailwind", "move: Reflect", "move: Light Screen"
+                    for ev in self._get_events(tags, "sidestart"):
+                        if len(ev) >= 2:
+                            p = "p1" if ev[0].strip().startswith("p1") else "p2"
+                            # Strip "move: " / "ability: " prefix before matching
+                            effect = ev[1].lower().split(":")[-1].strip()
+                            if "tailwind" in effect:         sim[f"{p}_tailwind"] = True
+                            elif "reflect" in effect:        sim[f"{p}_reflect"] = True
+                            elif "lightscreen" in effect or "light screen" in effect:
+                                sim[f"{p}_lightscreen"] = True
+                            elif "auroraveil" in effect or "aurora veil" in effect:
+                                sim[f"{p}_auroraveil"] = True
+
+                    for ev in self._get_events(tags, "sideend"):
+                        if len(ev) >= 2:
+                            p = "p1" if ev[0].strip().startswith("p1") else "p2"
+                            effect = ev[1].lower().split(":")[-1].strip()
+                            if "tailwind" in effect:         sim[f"{p}_tailwind"] = False
+                            elif "reflect" in effect:        sim[f"{p}_reflect"] = False
+                            elif "lightscreen" in effect or "light screen" in effect:
+                                sim[f"{p}_lightscreen"] = False
+                            elif "auroraveil" in effect or "aurora veil" in effect:
+                                sim[f"{p}_auroraveil"] = False
+
+                    # HP (damage / heal)
+                    for key in ("damage", "heal"):
+                        for ev in self._get_events(tags, key):
+                            if len(ev) >= 2:
+                                sk = self._slot_key(ev[0])
+                                bid = self._b_id(sk, board)
+                                if bid is not None:
+                                    sim["hp"][bid] = ev[1].strip()
+
+                    # Status / Curestatus
+                    for ev in self._get_events(tags, "status"):
+                        if len(ev) >= 2:
+                            bid = self._b_id(self._slot_key(ev[0]), board)
+                            if bid is not None:
+                                sim["status"][bid] = ev[1].strip()
+
+                    for ev in self._get_events(tags, "curestatus"):
+                        if ev:
+                            bid = self._b_id(self._slot_key(ev[0]), board)
+                            if bid is not None:
+                                sim["status"].pop(bid, None)
+
+                    # Faint
+                    for ev in self._get_events(tags, "faint"):
+                        if ev:
+                            bid = self._b_id(self._slot_key(ev[0]), board)
+                            if bid is not None:
+                                sim["hp"][bid] = "0 fnt"
+                                sim["status"].pop(bid, None)
+                                sim["boosts"].pop(bid, None)
+
+                    # Boost / Unboost
+                    for key, sign in (("boost", 1), ("unboost", -1)):
+                        for ev in self._get_events(tags, key):
+                            if len(ev) >= 3:
+                                bid = self._b_id(self._slot_key(ev[0]), board)
+                                stat = ev[1].lower()
+                                try:
+                                    stages = int(ev[2]) * sign
+                                except ValueError:
+                                    stages = sign
+                                if bid is not None:
+                                    if bid not in sim["boosts"]:
+                                        sim["boosts"][bid] = {}
+                                    sim["boosts"][bid][stat] = (
+                                        sim["boosts"][bid].get(stat, 0) + stages)
+
+                    for ev in self._get_events(tags, "clearallboost"):
+                        sim["boosts"] = {}
+
+                    # Mega / Tera
+                    for ev in self._get_events(tags, "mega"):
+                        if ev:
+                            bid = self._b_id(self._slot_key(ev[0]), board)
+                            if bid is not None:
+                                sim["mega"][bid] = True
+
+                    for ev in self._get_events(tags, "terastallize"):
+                        if len(ev) >= 2:
+                            bid = self._b_id(self._slot_key(ev[0]), board)
+                            if bid is not None:
+                                sim["tera"][bid] = ev[1].strip()
+
+                    # Enditem
+                    for ev in self._get_events(tags, "enditem"):
+                        if len(ev) >= 2:
+                            bid = self._b_id(self._slot_key(ev[0]), board)
+                            if bid is not None:
+                                sim["enditem"][bid] = ev[1].strip()
+
+                except Exception as e:
+                    print(f"[populate_turns] {act.get('type','?')}: {e}")
+
+                act["simulated_state"] = copy.deepcopy(sim)
+
+        if self.list_widget_turni.count():
             self.list_widget_turni.setCurrentRow(0)
             self.on_turn_clicked(self.list_widget_turni.item(0))
-            
-            if self.list_widget_azioni.count() > 0:
+            if self.list_widget_azioni.count():
                 self.list_widget_azioni.setCurrentRow(0)
                 self.on_action_clicked(self.list_widget_azioni.item(0))
 
-    # ==========================================
-    # CLICK EVENT HANDLERS
-    # ==========================================
+    # ── ON TURN CLICKED ───────────────────────────────────────────────────────
 
     def on_turn_clicked(self, item: QListWidgetItem):
         self.list_widget_azioni.clear()
-        
         turn_data = item.data(Qt.UserRole)
         if not turn_data or not isinstance(turn_data, dict):
             return
-            
-        actions = turn_data.get("actions", [])
-        for act in actions:
-            action_desc = f"#{act.get('order', 0) + 1} {act.get('type', '?').upper()}"
-            act_item = QListWidgetItem(action_desc)
+        for act in turn_data.get("actions", []):
+            act_type = act.get("type", "?")
+            details = act.get("details", "")
+            icon = ACTION_ICONS.get(act_type, "▪️")
+            order = act.get("order", 0) + 1
+            label = f"{icon} #{order} {act_type.upper()}"
+            if details:
+                label += f" — {details}"
+            act_item = QListWidgetItem(label)
             act_item.setData(Qt.UserRole, act)
+            colors = {"move": "#141414", "switch": "#1a1a1a",
+                      "cant": "#0a0a0a", "faint": "#2a1414"}
+            act_item.setBackground(QColor(colors.get(act_type, "#1A1A1A")))
             self.list_widget_azioni.addItem(act_item)
+
+    # ── ON ACTION CLICKED ─────────────────────────────────────────────────────
 
     def on_action_clicked(self, item: QListWidgetItem):
         action_data = item.data(Qt.UserRole)
         if not action_data or not isinstance(action_data, dict):
             return
-            
-        # 1. Update Pokemon In Campo
-        board_state = action_data.get("board_state", {})
-        sim_state = action_data.get("simulated_state", {"hp": {}, "status": {}, "weather": None})
-        
-        def format_board_slot(label_prefix, species_data, sim):
-            species = species_data.get("name", "Vuoto") if isinstance(species_data, dict) else species_data
-            if not species or species == "Vuoto":
-                return f"<b>{label_prefix}</b><br>(Vuoto)"
-            
-            b_id = species_data.get("id") if isinstance(species_data, dict) else None
-            
-            hp_val = sim["hp"].get(b_id, "100/100")
-            st_val = sim["status"].get(b_id, "")
-            
-            hp_pct = 100
-            try:
-                if hp_val.startswith("0 fnt") or "fnt" in hp_val:
-                    hp_pct = 0
-                else:
-                    parts = hp_val.split()[0].split('/')
-                    if len(parts) == 2:
-                        hp_pct = int(float(parts[0]) / float(parts[1]) * 100)
-            except:
-                pass
-                
-            color = "#00ff00"
-            if hp_pct < 50: color = "#ffff00"
-            if hp_pct < 20: color = "#ff0000"
-            if hp_pct == 0: color = "#555555"
-            
-            st_badge = f'<span style="background-color:#9900cc; padding: 1px 4px; border-radius: 3px; font-size:10px; font-weight:bold; color:white;">{st_val.upper()}</span>' if st_val else ''
-            
-            # Use an HTML table for the HP bar because QLabel RichText does not support CSS width/height on div
-            bar = f'<table width="100%" height="8" cellspacing="0" cellpadding="0" style="margin-top:4px;"><tr><td width="{hp_pct}%" bgcolor="{color}"></td><td width="{100-hp_pct}%" bgcolor="#444444"></td></tr></table>'
-            info = f'<div style="font-size:11px; margin-top:2px; color:#333;">{hp_val} {st_badge}</div>'
-            
-            icon_path = get_pokemon_icon_path(species)
-            img_html = f"<img src='{icon_path}' width='64'><br>" if icon_path else ""
-            
-            return f"<b>{label_prefix}</b><br>{img_html}{species}<br>{bar}{info}"
 
-        self.lbl_p1a.setText(format_board_slot("P1a", board_state.get("p1a", "Vuoto"), sim_state))
-        self.lbl_p1b.setText(format_board_slot("P1b", board_state.get("p1b", "Vuoto"), sim_state))
-        self.lbl_p2a.setText(format_board_slot("P2a", board_state.get("p2a", "Vuoto"), sim_state))
-        self.lbl_p2b.setText(format_board_slot("P2b", board_state.get("p2b", "Vuoto"), sim_state))
-        
+        board      = action_data.get("board_state", {})
+        sim        = action_data.get("simulated_state", {})
+        hp_map     = sim.get("hp", {})
+        status_map = sim.get("status", {})
+        boost_map  = sim.get("boosts", {})
+        mega_map   = sim.get("mega", {})
+        tera_map   = sim.get("tera", {})
+        enditem_map = sim.get("enditem", {})
+
+        # ── 1. Board slots ────────────────────────────────────────────────────
+        def format_slot(prefix, slot_data):
+            if not isinstance(slot_data, dict):
+                return f"<b>{prefix}</b><br><i style='color:#666'>(Vuoto)</i>"
+            species = slot_data.get("name", "")
+            if not species:
+                return f"<b>{prefix}</b><br><i style='color:#666'>(Vuoto)</i>"
+            bid = slot_data.get("id")
+            hp_raw  = hp_map.get(bid, "")
+            st_val  = status_map.get(bid, "")
+            boosts  = boost_map.get(bid, {})
+            is_mega = mega_map.get(bid, False)
+            tera    = tera_map.get(bid, "")
+            no_item = bid in enditem_map
+
+            hp_pct = 100
+            hp_display = hp_raw if hp_raw else "100%"
+            try:
+                if "fnt" in hp_raw:
+                    hp_pct, hp_display = 0, "💀 KO"
+                elif "/" in hp_raw:
+                    a, b = hp_raw.split()[0].split("/")
+                    hp_pct = max(0, min(100,
+                                        int(round(float(a) / float(b) * 100))))
+                    hp_display = hp_raw.split()[0]
+            except Exception:
+                hp_pct = 100
+
+            bar_color = ("#27ae60" if hp_pct > 50
+                         else "#f39c12" if hp_pct > 20
+                         else "#e74c3c")
+            if hp_pct == 0:
+                bar_color = "#555"
+
+            bar = (f'<table width="100%" height="6" cellspacing="0" cellpadding="0"'
+                   f' style="margin:2px 0;">'
+                   f'<tr><td width="{hp_pct}%" bgcolor="{bar_color}"></td>'
+                   f'<td width="{100 - hp_pct}%" bgcolor="#333"></td></tr></table>')
+
+            st_html = ""
+            if st_val:
+                bg = STATUS_COLORS.get(st_val.lower(), "#555")
+                lb = STATUS_LABELS.get(st_val.lower(), st_val.upper())
+                st_html = (f' <span style="background:{bg};color:white;font-size:9px;'
+                           f'padding:1px 3px;border-radius:3px;">{lb}</span>')
+
+            boost_html = ""
+            for stat, stages in boosts.items():
+                if stages == 0:
+                    continue
+                arrow = "▲" if stages > 0 else "▼"
+                col = "#4fc3f7" if stages > 0 else "#ef9a9a"
+                sname = STAT_NAMES.get(stat, stat.upper())
+                boost_html += (f'<span style="color:{col};font-size:9px;margin-right:2px;">'
+                               f'{arrow}{abs(stages)} {sname}</span>')
+
+            badge_html = ""
+            if is_mega:
+                badge_html += ('<span style="background:#ff6f00;color:white;font-size:9px;'
+                               'padding:1px 3px;border-radius:3px;margin-right:2px;">MEGA</span>')
+            if tera:
+                badge_html += (f'<span style="background:#7b1fa2;color:white;font-size:9px;'
+                               f'padding:1px 3px;border-radius:3px;">TERA:{tera}</span>')
+            if no_item:
+                badge_html += ('<span style="background:#555;color:#888;font-size:9px;'
+                               'padding:1px 3px;border-radius:3px;text-decoration:line-through;">'
+                               'Item</span>')
+
+            icon_path = get_pokemon_icon_path(species)
+            img_html = f"<img src='{icon_path}' width='40'><br>" if icon_path else ""
+            name_style = "text-decoration:line-through;color:#888;" if hp_pct == 0 else ""
+
+            return (f"<b>{prefix}</b><br>{img_html}"
+                    f"<span style='{name_style}'>{species}</span> {badge_html}<br>"
+                    f"{bar}"
+                    f"<span style='font-size:10px;'>{hp_display}{st_html}</span><br>"
+                    f"<span style='font-size:9px;'>{boost_html}</span>")
+
+        self.lbl_p1a.setText(format_slot("P1a", board.get("p1a", {})))
+        self.lbl_p1b.setText(format_slot("P1b", board.get("p1b", {})))
+        self.lbl_p2a.setText(format_slot("P2a", board.get("p2a", {})))
+        self.lbl_p2b.setText(format_slot("P2b", board.get("p2b", {})))
+
+        # ── 2. Conditions ─────────────────────────────────────────────────────
         self.list_condizioni_p1.clear()
         self.list_condizioni_generali.clear()
         self.list_condizioni_p2.clear()
 
-        weather_event = sim_state.get("weather")
-        if weather_event:
-            # Se è una lista (da tags), prendiamo il primo elemento
-            if isinstance(weather_event, list):
-                weather_name = weather_event[0]
-                extra_info = weather_event[1:] if len(weather_event) > 1 else []
-            else:
-                # Se è una stringa (da turn.weather)
-                weather_name = weather_event
-                extra_info = []
+        weather = sim.get("weather")
+        terrain = sim.get("terrain")
+        board_bg = "#1a1a1a"
 
-            bg_colors = {
-                "SunnyDay": "#ffcccc", 
-                "RainDance": "#cce5ff", 
-                "Snow": "#e6f2ff", 
-                "Sandstorm": "#ffe6cc" 
-            }
-            board_bg = bg_colors.get(weather_name, "#222222") # scuro di default
-            self.frame_pokemon_in_campo.setStyleSheet(f"background-color: {board_bg}; border: 1px solid #ccc; border-radius: 8px;")
-            
-            ui_str = f"Meteo: {weather_name}"
-            
-            from_str = ""
-            of_str = ""
-            for tag_part in extra_info:
-                if tag_part.startswith("[from]"):
-                    from_str = tag_part.replace("[from]", "").strip()
-                elif tag_part.startswith("[of]"):
-                    of_str = tag_part.replace("[of]", "").strip()
-            
-            if from_str or of_str:
-                ui_str += " (Evocato da:"
-                if from_str:
-                    ui_str += f" {from_str}"
-                if of_str:
-                    ui_str += f" [{of_str}]"
-                ui_str += ")"
-            
-            self.list_condizioni_generali.addItem(ui_str)
-        else:
-            self.frame_pokemon_in_campo.setStyleSheet("background-color: #222222; border: 1px solid #ccc; border-radius: 8px;")
-        
-        # 2. Update Attributes
-        act_type = action_data.get('type', '')
-        details_text = action_data.get('details', 'N/A')
-        
-        if act_type == 'move':
-            details_text = f'<a href="move:{details_text}" style="color:#0055ff; text-decoration:none;">{details_text}</a>'
-        elif act_type == 'ability':
-            details_text = f'<a href="ability:{details_text}" style="color:#0055ff; text-decoration:none;">{details_text}</a>'
-        elif act_type == 'item':
-            details_text = f'<a href="item:{details_text}" style="color:#0055ff; text-decoration:none;">{details_text}</a>'
-            
-        html = f"""
-        <b style="color: #444;">Attore:</b> <span>{action_data.get('actor', 'N/A')}</span><br>
-        <b style="color: #444;">Bersaglio:</b> <span>{action_data.get('target', 'N/A')}</span><br>
-        <b style="color: #444;">Dettagli:</b> <span>{details_text}</span>
-        """
-        self.txt_attr.setHtml(html)
-        
-        # 3. Update Tags
+        if weather:
+            wname = weather[0] if isinstance(weather, list) else str(weather)
+            extra = weather[1:] if isinstance(weather, list) else []
+            from_s = next((p.replace("[from]", "").strip()
+                           for p in extra if p.startswith("[from]")), "")
+            of_s   = next((p.replace("[of]", "").strip()
+                           for p in extra if p.startswith("[of]")), "")
+            lbl = WEATHER_ICON.get(wname, f"🌫️ {wname}")
+            if from_s: lbl += f" · {from_s}"
+            if of_s:   lbl += f" [{of_s}]"
+            self.list_condizioni_generali.addItem(lbl)
+            board_bg = WEATHER_BG.get(wname, "#1a1a2e")
+
+        if terrain:
+            tname = terrain[0] if isinstance(terrain, list) else str(terrain)
+            extra = terrain[1:] if isinstance(terrain, list) else []
+            from_s = next((p.replace("[from]", "").strip()
+                           for p in extra if p.startswith("[from]")), "")
+            tlbl = TERRAIN_ICON.get(tname.lower(), f"🌐 {tname}")
+            if from_s: tlbl += f" · {from_s}"
+            self.list_condizioni_generali.addItem(tlbl)
+            if not weather:
+                board_bg = TERRAIN_BG.get(tname.lower(), "#1a1a1a")
+
+        if sim.get("trick_room"):
+            self.list_condizioni_generali.addItem("🔁 Trick Room attivo")
+
+        if sim.get("p1_tailwind"):    self.list_condizioni_p1.addItem("💨 Tailwind")
+        if sim.get("p1_reflect"):     self.list_condizioni_p1.addItem("🛡️ Reflect")
+        if sim.get("p1_lightscreen"): self.list_condizioni_p1.addItem("✨ Light Screen")
+        if sim.get("p1_auroraveil"):  self.list_condizioni_p1.addItem("🌈 Aurora Veil")
+        if sim.get("p2_tailwind"):    self.list_condizioni_p2.addItem("💨 Tailwind")
+        if sim.get("p2_reflect"):     self.list_condizioni_p2.addItem("🛡️ Reflect")
+        if sim.get("p2_lightscreen"): self.list_condizioni_p2.addItem("✨ Light Screen")
+        if sim.get("p2_auroraveil"):  self.list_condizioni_p2.addItem("🌈 Aurora Veil")
+
+        self.frame_pokemon_in_campo.setStyleSheet(
+            f"background:{board_bg}; border:1px solid #333; border-radius:8px;")
+
+        # ── 3. Action attributes ──────────────────────────────────────────────
+        act_type   = action_data.get("type", "")
+        details    = action_data.get("details", "N/A")
+        actor      = action_data.get("actor", "N/A")
+        target_str = action_data.get("target", "N/A")
+
+        detail_link = details
+        if act_type == "move":
+            detail_link = (f'<a href="move:{details}" style="color:#467A77;">'
+                           f'{details}</a>')
+        elif act_type == "ability":
+            detail_link = (f'<a href="ability:{details}" style="color:#B6FAF5;">'
+                           f'{details}</a>')
+        elif act_type == "item":
+            detail_link = (f'<a href="item:{details}" style="color:#FAB7F0;">'
+                           f'{details}</a>')
+
+        icon = ACTION_ICONS.get(act_type, "▪️")
+        self.txt_attr.setHtml(
+            f'<h3 style="margin:0 0 4px 0;color:#FFFFFF;">{icon} {act_type.upper()}</h3>'
+            f'<b style="color:#AAAAAA;">Attore:</b> '
+            f'<span style="color:#FAB7F0;">{actor}</span><br>'
+            f'<b style="color:#AAAAAA;">Bersaglio:</b> '
+            f'<span style="color:#B6FAF5;">{target_str}</span><br>'
+            f'<b style="color:#AAAAAA;">Dettagli:</b> {detail_link}'
+        )
+
+        # ── 4. Tag inspector (semantic) ───────────────────────────────────────
+        self._populate_tag_tree(action_data)
+
+    # ── TAG TREE ──────────────────────────────────────────────────────────────
+
+    TAG_META = {
+        "damage":         ("💥", "Danno subito"),
+        "heal":           ("💚", "Cura ricevuta"),
+        "boost":          ("📈", "Statistiche aumentate"),
+        "unboost":        ("📉", "Statistiche ridotte"),
+        "status":         ("⚠️", "Stato alterato"),
+        "curestatus":     ("✅", "Guarigione stato"),
+        "faint":          ("💀", "Sconfitta"),
+        "weather":        ("🌦️", "Meteo"),
+        "fieldstart":     ("🌐", "Campo attivato"),
+        "fieldend":       ("🌐", "Campo terminato"),
+        "sidestart":      ("🛡️", "Effetto lato attivato"),
+        "sideend":        ("🛡️", "Effetto lato terminato"),
+        "ability":        ("✨", "Abilità attivata"),
+        "enditem":        ("🎒", "Strumento consumato"),
+        "mega":           ("💎", "Megaevoluzione"),
+        "terastallize":   ("🔮", "Teracristallizzazione"),
+        "miss":           ("❌", "Mossa mancata"),
+        "immune":         ("🛡️", "Immunità"),
+        "fail":           ("🚫", "Mossa fallita"),
+        "crit":           ("⚡", "Colpo critico"),
+        "supereffective": ("🔥", "Super efficace"),
+        "resisted":       ("🔵", "Non molto efficace"),
+        "activate":       ("⚙️", "Effetto attivato"),
+        "start":          ("▶️", "Effetto iniziato"),
+        "end":            ("⏹️", "Effetto terminato"),
+        "singleturn":     ("🔒", "Protezione turno singolo"),
+        "mustrecharge":   ("⏳", "Ricarica necessaria"),
+        "hint":           ("💬", "Suggerimento"),
+        "hitcount":       ("🔢", "Numero colpi"),
+        "prepare":        ("⚙️", "Preparazione mossa"),
+        "clearallboost":  ("🔄", "Reset tutti i boost"),
+        "clearnegativeboost": ("🔄", "Reset boost negativi"),
+        "anim":           ("🎬", "Animazione"),
+    }
+
+    def _populate_tag_tree(self, action_data: dict):
         self.tree_widget_tags.clear()
         tags = action_data.get("tags", {})
-        
-        from PySide6.QtWidgets import QTreeWidgetItem
         if isinstance(tags, str):
             try:
                 tags = json.loads(tags)
-            except json.JSONDecodeError:
+            except Exception:
                 tags = {"raw": tags}
-                
+        if not isinstance(tags, dict) or not tags:
+            return
+
+        board = action_data.get("board_state", {})
         for key, val in tags.items():
-            tag_item = QTreeWidgetItem(self.tree_widget_tags, [str(key).upper()])
-            if isinstance(val, list):
-                for ev in val:
-                    if isinstance(ev, list):
-                        QTreeWidgetItem(tag_item, [" | ".join(ev)])
-                    else:
-                        QTreeWidgetItem(tag_item, [str(ev)])
-            else:
-                QTreeWidgetItem(tag_item, [str(val)])
-            tag_item.setExpanded(True)
+            icon, desc = self.TAG_META.get(key.lower(), ("▪️", key.upper()))
+            root = QTreeWidgetItem(self.tree_widget_tags, [f"{icon} {desc}"])
+            root.setForeground(0, QColor("#e0e0e0"))
+            for ev in self._get_events({key: val}, key):
+                label = self._format_event_label(key.lower(), ev, board)
+                child = QTreeWidgetItem(root, [label])
+                child.setForeground(0, QColor("#aaaaaa"))
+            root.setExpanded(True)
+
+    def _format_event_label(self, tag: str, ev: list, board: dict) -> str:
+        if not ev:
+            return "(vuoto)"
+        target = ev[0]
+        from_s = next((p.replace("[from]", "").strip()
+                       for p in ev if p.startswith("[from]")), "")
+        of_s   = next((p.replace("[of]", "").strip()
+                       for p in ev if p.startswith("[of]")), "")
+        upkeep = any("[upkeep]" in p for p in ev)
+
+        if tag == "damage":
+            hp = ev[1] if len(ev) > 1 else "?"
+            cause = f" (da {from_s})" if from_s else ""
+            return f"{target} → {hp}{cause}"
+
+        if tag == "heal":
+            hp = ev[1] if len(ev) > 1 else "?"
+            cause = ""
+            if from_s:
+                cause = f" (da {from_s}" + (f" di {of_s})" if of_s else ")")
+            return f"{target} → {hp}{cause}"
+
+        if tag in ("boost", "unboost"):
+            stat = STAT_NAMES.get(ev[1].lower(), ev[1]) if len(ev) > 1 else "?"
+            stages = ev[2] if len(ev) > 2 else "?"
+            arrow = "▲" if tag == "boost" else "▼"
+            return f"{target}: {arrow}{stages} {stat}"
+
+        if tag == "status":
+            st = STATUS_LABELS.get(ev[1].lower(), ev[1]) if len(ev) > 1 else "?"
+            return f"{target} → {st}"
+
+        if tag == "curestatus":
+            st = ev[1] if len(ev) > 1 else "?"
+            return f"{target} guarisce da {st}"
+
+        if tag == "faint":
+            return f"💀 {target} è sconfitto"
+
+        if tag == "weather":
+            wname = target
+            suffix = " (continua)" if upkeep else ""
+            if from_s: suffix += f" · da {from_s}"
+            if of_s:   suffix += f" [{of_s}]"
+            return f"{WEATHER_ICON.get(wname, wname)}{suffix}"
+
+        if tag in ("fieldstart", "fieldend"):
+            action = "attivato" if "start" in tag else "terminato"
+            return f"{target} {action}"
+
+        if tag in ("sidestart", "sideend"):
+            effect = ev[1] if len(ev) > 1 else "?"
+            action = "attivato" if "start" in tag else "terminato"
+            return f"{target} → {effect} {action}"
+
+        if tag == "ability":
+            abil = ev[1] if len(ev) > 1 else "?"
+            cause = f" [{from_s}]" if from_s else ""
+            return f"{target}: {abil}{cause}"
+
+        if tag == "enditem":
+            item_name = ev[1] if len(ev) > 1 else "?"
+            return f"{target} usa/perde: {item_name}"
+
+        if tag == "mega":
+            stone = ev[2] if len(ev) > 2 else ""
+            return f"💎 {target} Megaevolve{' con ' + stone if stone else ''}"
+
+        if tag == "terastallize":
+            t_type = ev[1] if len(ev) > 1 else "?"
+            return f"🔮 {target} → Tera {t_type}"
+
+        if tag == "miss":
+            return f"❌ {target} manca il bersaglio"
+
+        if tag == "immune":
+            return f"🛡️ {target} è immune"
+
+        if tag == "crit":
+            return f"⚡ Colpo critico su {target}"
+
+        if tag == "supereffective":
+            return f"🔥 Super efficace su {target}"
+
+        if tag == "resisted":
+            return f"🔵 Non molto efficace su {target}"
+
+        if tag == "fail":
+            return f"🚫 Mossa fallita su {target}"
+
+        if tag == "singleturn":
+            effect = ev[1] if len(ev) > 1 else "?"
+            return f"🔒 {target}: {effect}"
+
+        if tag == "activate":
+            effect = ev[1] if len(ev) > 1 else "?"
+            return f"⚙️ {target} attiva: {effect}"
+
+        # Generic fallback
+        return " · ".join(ev)
+
+    # ── POKEMON PANEL ─────────────────────────────────────────────────────────
 
     def on_p1_pokemon_clicked(self, item: QListWidgetItem):
-        self._update_pokemon_dati(self.lbl_dati_p1, self.frame_img_p1, item.data(Qt.UserRole))
-        
+        self._update_pokemon_dati(
+            self.lbl_dati_p1, self.frame_img_p1, item.data(Qt.UserRole))
+
     def on_p2_pokemon_clicked(self, item: QListWidgetItem):
-        self._update_pokemon_dati(self.lbl_dati_p2, self.frame_img_p2, item.data(Qt.UserRole))
-        
-    def _update_pokemon_dati(self, label_widget: QLabel, img_widget: QLabel, poke_data):
+        self._update_pokemon_dati(
+            self.lbl_dati_p2, self.frame_img_p2, item.data(Qt.UserRole))
+
+    def _update_pokemon_dati(self, lbl: QLabel, img: QLabel, poke_data):
         if not isinstance(poke_data, dict):
-            label_widget.setText("Dati non disponibili")
-            img_widget.clear()
+            lbl.setText("Dati non disponibili")
+            img.clear()
             return
-            
-        species = poke_data.get("species") or "N/A"
-        item_held = poke_data.get("item") or "N/A"
-        ability = poke_data.get("ability") or "N/A"
+        species   = poke_data.get("species")  or "N/A"
+        item_held = poke_data.get("item")      or "N/A"
+        ability   = poke_data.get("ability")   or "N/A"
         tera_type = poke_data.get("tera_type") or "N/A"
-        nature = poke_data.get("nature") or "N/A"
+        nature    = poke_data.get("nature")    or "N/A"
         base_stats = poke_data.get("base_stats", {})
-        moves = poke_data.get("moves", [])
-        
-        # Set Image
+        moves     = poke_data.get("moves", [])
+
         icon_path = get_pokemon_icon_path(species)
         if icon_path:
-            img_widget.setPixmap(QPixmap(icon_path).scaled(96, 96, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            img.setPixmap(QPixmap(icon_path).scaled(
+                96, 96, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         else:
-            img_widget.setText("(Nessuna Immagine)")
-        
-        # Set Stats and Moves
-        stats_str = ", ".join([f"{k}: {v}" for k, v in base_stats.items()]) if base_stats else "N/A"
-        moves_str = "<br>&nbsp;&nbsp;&bull; ".join(moves) if moves else "N/A"
-        if moves_str != "N/A":
-            moves_str = "<br>&nbsp;&nbsp;&bull; " + moves_str
-            
-        info = (
+            img.setText("(No img)")
+
+        stats_str = " | ".join(
+            f"{k}: {v}" for k, v in base_stats.items()) if base_stats else "N/A"
+        moves_html = "".join(
+            f'<br>&nbsp;&nbsp;• {m}' for m in moves) if moves else "<br>N/A"
+
+        lbl.setTextFormat(Qt.RichText)
+        lbl.setText(
             f"<b>Specie:</b> {species}<br>"
             f"<b>Strumento:</b> {item_held}<br>"
             f"<b>Abilità:</b> {ability}<br>"
-            f"<b>Teratipo:</b> {tera_type}<br>"
+            f"<b>Tera:</b> {tera_type}<br>"
             f"<b>Natura:</b> {nature}<br>"
-            f"<b>Statistiche Base:</b><br>{stats_str}<br>"
-            f"<b>Mosse:</b>{moves_str}"
+            f'<b>Stat Base:</b> <span style="color:#aaa;font-size:11px;">'
+            f'{stats_str}</span><br>'
+            f"<b>Mosse:</b>{moves_html}"
         )
-        label_widget.setText(info)

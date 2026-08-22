@@ -70,8 +70,13 @@ class MetaStatsWidget(QWidget):
         self.stat_combo.addItems(["Speed", "HP", "Attack", "Defense", "Sp. Atk", "Sp. Def"])
         self.stat_combo.setCurrentText("Speed")
         self.stat_combo.currentIndexChanged.connect(self.update_chart)
+        self.btn_reset_zoom = QPushButton("Reset Zoom")
+        self.btn_reset_zoom.clicked.connect(self.reset_zoom)
+        self.btn_reset_zoom.setToolTip("Trascina il mouse sul grafico per zoomare. Usa questo tasto per resettare.")
+        
         stats_controls.addWidget(self.stat_label)
         stats_controls.addWidget(self.stat_combo)
+        stats_controls.addWidget(self.btn_reset_zoom)
         stats_controls.addStretch()
         self.chart_layout.addLayout(stats_controls)
         
@@ -81,6 +86,7 @@ class MetaStatsWidget(QWidget):
         
         self.chart_view = QChartView(self.chart)
         self.chart_view.setRenderHint(QPainter.Antialiasing)
+        self.chart_view.setRubberBand(QChartView.RectangleRubberBand)
         self.chart_layout.addWidget(self.chart_view)
         
         self.tab_stats_layout.addWidget(self.chart_container, stretch=3)
@@ -1211,3 +1217,6 @@ class MetaStatsWidget(QWidget):
                 series.attachAxis(axis)
                 
             self.threshold_series_dict[stat_key] = series
+
+    def reset_zoom(self):
+        self.chart.zoomReset()
