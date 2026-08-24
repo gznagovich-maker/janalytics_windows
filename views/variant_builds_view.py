@@ -1,7 +1,8 @@
 import os
 from collections import Counter
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QGridLayout, QScrollArea, QFrame
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QGridLayout, QScrollArea, QFrame,
+    QTableWidget, QTableWidgetItem
 )
 from PySide6.QtCore import Qt, Signal
 from database.connection import SessionLocal
@@ -107,6 +108,94 @@ class VariantBuildsWidget(QWidget):
                 col = 0
                 row += 1
                 
+        # --- TABELLA MATCHUP ---
+        from collections import defaultdict
+        from src.analytics.archetypes import get_match_team_archetypes
+        from sqlalchemy.orm import joinedload
+        from database.models import Match, Turn, TurnAction
+        
+        matches_db = session.query(Match).options(
+            joinedload(Match.teams).joinedload(Team.pokemon_builds),
+            joinedload(Match.turns).joinedload(Turn.actions)
+        ).filter(Match.id.in_(match_ids)).all()
+        
+        matchups = defaultdict(lambda: defaultdict(lambda: {'wins': 0, 'total': 0}))
+        
+        our_team_ids = set()
+        for t_id in variant["team_ids"]:
+            our_team_ids.add(t_id)
+            
+        for m in matches_db:
+            if len(m.teams) != 2:
+                continue
+            
+            our_team = None
+            opp_team = None
+            for t in m.teams:
+                if t.id in our_team_ids:
+                    our_team = t
+                else:
+                    opp_team = t
+                    
+            if not our_team or not opp_team:
+                continue
+                
+            our_archs = get_match_team_archetypes(our_team)
+            opp_archs = get_match_team_archetypes(opp_team)
+            is_win = (m.winner_id == our_team.trainer_id)
+            
+            for oa in our_archs:
+                for opa in opp_archs:
+                    matchups[oa][opa]['total'] += 1
+                    if is_win:
+                        matchups[oa][opa]['wins'] += 1
+        
+        if matchups:
+            all_our_archs = sorted(list(matchups.keys()))
+            all_opp_archs = set()
+            for oa in all_our_archs:
+                all_opp_archs.update(matchups[oa].keys())
+            all_opp_archs = sorted(list(all_opp_archs))
+            
+            table = QTableWidget()
+            table.setRowCount(len(all_our_archs))
+            table.setColumnCount(len(all_opp_archs) * 2)
+            
+            headers = []
+            for opa in all_opp_archs:
+                headers.extend([f"{opa}", f"Replay {opa}"])
+            table.setHorizontalHeaderLabels(headers)
+            table.setVerticalHeaderLabels(all_our_archs)
+            
+            for i, oa in enumerate(all_our_archs):
+                for j, opa in enumerate(all_opp_archs):
+                    stats = matchups[oa].get(opa, {'wins': 0, 'total': 0})
+                    if stats['total'] > 0:
+                        wr_str = f"{round((stats['wins'] / stats['total']) * 100)}%"
+                        count_str = str(stats['total'])
+                    else:
+                        wr_str = "-"
+                        count_str = "-"
+                        
+                    wr_item = QTableWidgetItem(wr_str)
+                    wr_item.setTextAlignment(Qt.AlignCenter)
+                    count_item = QTableWidgetItem(count_str)
+                    count_item.setTextAlignment(Qt.AlignCenter)
+                    
+                    table.setItem(i, j * 2, wr_item)
+                    table.setItem(i, j * 2 + 1, count_item)
+            
+            table.setStyleSheet("QTableWidget { background-color: #1A1A1A; color: white; border: 1px solid #333; gridline-color: #444; } QHeaderView::section { background-color: #222; color: #aaffaa; border: 1px solid #333; padding: 4px; font-weight: bold; }")
+            table.resizeColumnsToContents()
+            table.setMinimumHeight(150 + (len(all_our_archs) * 35))
+            
+            lbl_table = QLabel("Rapporti Matchup")
+            lbl_table.setStyleSheet("font-size: 16px; font-weight: bold; color: #aaffaa; margin-top: 20px; margin-bottom: 10px;")
+            
+            next_row = row + 1 if col > 0 else row
+            self.content_layout.addWidget(lbl_table, next_row, 0, 1, 3)
+            self.content_layout.addWidget(table, next_row + 1, 0, 1, 3)
+            
         session.close()
                 
     def create_build_card(self, species, count, items, abilities, teras, natures, moves) -> QFrame:

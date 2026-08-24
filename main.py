@@ -20,6 +20,7 @@ from views.mass_import_view import MassImportWidget
 from views.core_analysis_view import GlobalMetaWidget
 from views.team_analysis_view import TeamAnalysisWidget
 from views.variant_builds_view import VariantBuildsWidget
+from views.limitless_views import LimitlessTournamentsWidget, LimitlessTournamentDetailWidget
 
 
 class ImportWidget(QWidget):
@@ -164,6 +165,7 @@ class MainWindow(QMainWindow):
         self.btn_nav_meta_stats = QPushButton("Statistiche Meta")
         self.btn_nav_core_analysis = QPushButton("Analisi Core")
         self.btn_nav_team_analysis = QPushButton("Team Analysis")
+        self.btn_nav_limitless = QPushButton("Tornei Limitless")
 
         self.btn_nav_import.clicked.connect(self.show_import_view)
         self.btn_nav_mass_import.clicked.connect(self.show_mass_import_view)
@@ -171,6 +173,7 @@ class MainWindow(QMainWindow):
         self.btn_nav_meta_stats.clicked.connect(lambda: self.stacked_widget.setCurrentIndex(8))
         self.btn_nav_core_analysis.clicked.connect(lambda: self.stacked_widget.setCurrentIndex(10))
         self.btn_nav_team_analysis.clicked.connect(lambda: self.stacked_widget.setCurrentIndex(11))
+        self.btn_nav_limitless.clicked.connect(self.show_limitless_tournaments)
 
         nav_layout.addWidget(self.btn_nav_import)
         nav_layout.addWidget(self.btn_nav_mass_import)
@@ -178,6 +181,7 @@ class MainWindow(QMainWindow):
         nav_layout.addWidget(self.btn_nav_meta_stats)
         nav_layout.addWidget(self.btn_nav_core_analysis)
         nav_layout.addWidget(self.btn_nav_team_analysis)
+        nav_layout.addWidget(self.btn_nav_limitless)
         nav_layout.addStretch()
         
         self.lbl_logo = QLabel()
@@ -217,6 +221,8 @@ class MainWindow(QMainWindow):
         self.core_analysis_view = GlobalMetaWidget()
         self.team_analysis_view = TeamAnalysisWidget()
         self.variant_builds_view = VariantBuildsWidget()
+        self.limitless_tournaments_view = LimitlessTournamentsWidget(self)
+        self.limitless_detail_view = LimitlessTournamentDetailWidget(self)
         
         # Connetti segnali build
         self.team_analysis_view.show_builds_signal.connect(self.show_variant_builds)
@@ -238,6 +244,8 @@ class MainWindow(QMainWindow):
         self.stacked_widget.addWidget(self.core_analysis_view) # Indice 10
         self.stacked_widget.addWidget(self.team_analysis_view) # Indice 11
         self.stacked_widget.addWidget(self.variant_builds_view) # Indice 12
+        self.stacked_widget.addWidget(self.limitless_tournaments_view) # Indice 13
+        self.stacked_widget.addWidget(self.limitless_detail_view) # Indice 14
 
         main_layout.addWidget(self.stacked_widget)
         
@@ -254,6 +262,8 @@ class MainWindow(QMainWindow):
         # Connessioni dei segnali tra schermate
         self.list_view.replay_selected.connect(self.show_detail_view)
         self.detail_view.back_requested.connect(self.show_list_view)
+        self.limitless_tournaments_view.tournament_selected.connect(self.show_limitless_detail)
+        self.limitless_detail_view.back_requested.connect(self.show_limitless_tournaments)
 
     def show_import_view(self):
         self.stacked_widget.setCurrentIndex(0)
@@ -272,6 +282,13 @@ class MainWindow(QMainWindow):
     def show_detail_view(self, match_id: str):
         self.detail_view.display_match(match_id)
         self.stacked_widget.setCurrentIndex(2)
+
+    def show_limitless_tournaments(self):
+        self.stacked_widget.setCurrentIndex(13)
+
+    def show_limitless_detail(self, tournament_id: str, tournament_name: str):
+        self.limitless_detail_view.load_tournament(tournament_id, tournament_name)
+        self.stacked_widget.setCurrentIndex(14)
 
     def navigate_to_catalog(self, url_str: str):
         # Esempio: "move:Incineroar", "item:Leftovers", "ability:Intimidate"

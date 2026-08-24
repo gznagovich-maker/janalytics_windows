@@ -12,6 +12,107 @@ def analizza_archetipo_statico():
     """
     pass
 
+def get_match_team_archetypes(team: Team) -> list[str]:
+    match = team.match
+    if not match or not match.turns:
+        return []
+        
+    N = len(match.turns)
+    if N == 0:
+        return []
+        
+    build_ids = {pb.id for pb in team.pokemon_builds}
+    
+    # Variabili metriche
+    weather_setters_in_team = 0
+    weather_name = ""
+    team_weathers = set()
+    
+    boost_stages = 0
+    
+    team_set_trickroom = False
+    team_set_tailwind = False
+    
+    for turn in match.turns:
+        if team.player_slot == "p1" and turn.p1_tailwind:
+            team_set_tailwind = True
+        elif team.player_slot == "p2" and turn.p2_tailwind:
+            team_set_tailwind = True
+            
+        for action in turn.actions:
+            if action.action_type in ("switch", "drag"):
+                if action.actor_build_id in build_ids:
+                    pass # Non più usato per il balance, ma lo lasciamo in caso
+            
+            # Parsing dei tags
+            if action.tags and isinstance(action.tags, dict):
+                # 1. METEO DINAMICO (Attribution)
+                if "weather" in action.tags:
+                    tag_str_lower = str(action.tags["weather"]).lower()
+                    if "[upkeep]" not in tag_str_lower and "none" not in tag_str_lower and "clearskies" not in tag_str_lower:
+                        w_val = str(action.tags["weather"]).replace("'", "").replace("[", "").replace("]", "")
+                        current_weather = w_val.split(",")[0].strip() if "," in w_val else w_val
+                        
+                        # Verifica CHI ha settato il meteo
+                        if action.actor_build_id in build_ids:
+                            team_weathers.add(current_weather)
+                        else:
+                            if f"[of] {team.player_slot}" in tag_str_lower:
+                                team_weathers.add(current_weather)
+                            elif action.details and f"[of] {team.player_slot}" in action.details.lower():
+                                team_weathers.add(current_weather)
+                                
+                # 2. SETUP SWEEP (Attribution)
+                if "boost" in action.tags:
+                    for evt in action.tags["boost"]:
+                        # evt[0] contiene ad es. 'p1a: Garchomp'
+                        if len(evt) >= 1 and evt[0].startswith(team.player_slot):
+                            try:
+                                boost_stages += int(evt[2]) if len(evt) >= 3 else 1
+                            except ValueError:
+                                boost_stages += 1
+                
+                if "setboost" in action.tags:
+                    for evt in action.tags["setboost"]:
+                        if len(evt) >= 1 and evt[0].startswith(team.player_slot):
+                            boost_stages += 2
+                            
+                # 3. TRICK ROOM e TAILWIND (Attribution da fieldstart/sideend)
+                if "fieldstart" in action.tags:
+                    for evt in action.tags["fieldstart"]:
+                        evt_str = str(evt).lower()
+                        if "trick room" in evt_str:
+                            if action.actor_build_id in build_ids or f"[of] {team.player_slot}" in evt_str:
+                                team_set_trickroom = True
+                                
+                if "sidestart" in action.tags:
+                    for evt in action.tags["sidestart"]:
+                        evt_str = str(evt).lower()
+                        if "tailwind" in evt_str:
+                            if action.actor_build_id in build_ids or f"[of] {team.player_slot}" in evt_str or f"['{team.player_slot}" in evt_str:
+                                team_set_tailwind = True
+                
+    # Gerarchia di classificazione rimossa per favorire archetipi frazionati simultanei
+    assigned_match_archetypes = []
+    
+    if team_set_trickroom:
+        assigned_match_archetypes.append("Trick Room")
+    if boost_stages >= 2:
+        assigned_match_archetypes.append("Setup Sweep")
+    for w in team_weathers:
+        assigned_match_archetypes.append(f"{w} Team" if w else "Weather Team")
+    if team_set_tailwind:
+        assigned_match_archetypes.append("Tailwind Offense")
+    
+    # Balance se non ha attivato altri archetipi aggressivi e il match è durato tanto
+    if not assigned_match_archetypes and N >= 8:
+        assigned_match_archetypes.append("Balance")
+        
+    if not assigned_match_archetypes:
+        assigned_match_archetypes.append("Unclassified")
+        
+    return assigned_match_archetypes
+
 def analizza_archetipo_team(team_id: str, lista_match_ids: list[int], session) -> str:
     """
     Analizza i replay di una squadra usando Event Sourcing Puro.
@@ -33,105 +134,12 @@ def analizza_archetipo_team(team_id: str, lista_match_ids: list[int], session) -
     teams_db = session.scalars(stmt).unique().all()
     
     for team in teams_db:
-        match = team.match
-        if not match or not match.turns:
-            continue
-            
-        N = len(match.turns)
-        if N == 0:
+        assigned_match_archetypes = get_match_team_archetypes(team)
+        if not assigned_match_archetypes:
             continue
             
         valid_matches += 1
-        build_ids = {pb.id for pb in team.pokemon_builds}
         
-        # Variabili metriche
-        weather_setters_in_team = 0
-        weather_name = ""
-        team_weathers = set()
-        
-        boost_stages = 0
-        
-        team_set_trickroom = False
-        team_set_tailwind = False
-        
-        for turn in match.turns:
-            if team.player_slot == "p1" and turn.p1_tailwind:
-                team_set_tailwind = True
-            elif team.player_slot == "p2" and turn.p2_tailwind:
-                team_set_tailwind = True
-                
-            for action in turn.actions:
-                if action.action_type in ("switch", "drag"):
-                    if action.actor_build_id in build_ids:
-                        pass # Non più usato per il balance, ma lo lasciamo in caso
-                
-                # Parsing dei tags
-                if action.tags and isinstance(action.tags, dict):
-                    # 1. METEO DINAMICO (Attribution)
-                    if "weather" in action.tags:
-                        tag_str_lower = str(action.tags["weather"]).lower()
-                        if "[upkeep]" not in tag_str_lower and "none" not in tag_str_lower and "clearskies" not in tag_str_lower:
-                            w_val = str(action.tags["weather"]).replace("'", "").replace("[", "").replace("]", "")
-                            current_weather = w_val.split(",")[0].strip() if "," in w_val else w_val
-                            
-                            # Verifica CHI ha settato il meteo
-                            if action.actor_build_id in build_ids:
-                                team_weathers.add(current_weather)
-                            else:
-                                if f"[of] {team.player_slot}" in tag_str_lower:
-                                    team_weathers.add(current_weather)
-                                elif action.details and f"[of] {team.player_slot}" in action.details.lower():
-                                    team_weathers.add(current_weather)
-                                    
-                    # 2. SETUP SWEEP (Attribution)
-                    if "boost" in action.tags:
-                        for evt in action.tags["boost"]:
-                            # evt[0] contiene ad es. 'p1a: Garchomp'
-                            if len(evt) >= 1 and evt[0].startswith(team.player_slot):
-                                try:
-                                    boost_stages += int(evt[2]) if len(evt) >= 3 else 1
-                                except ValueError:
-                                    boost_stages += 1
-                    
-                    if "setboost" in action.tags:
-                        for evt in action.tags["setboost"]:
-                            if len(evt) >= 1 and evt[0].startswith(team.player_slot):
-                                boost_stages += 2
-                                
-                    # 3. TRICK ROOM e TAILWIND (Attribution da fieldstart/sideend)
-                    if "fieldstart" in action.tags:
-                        for evt in action.tags["fieldstart"]:
-                            evt_str = str(evt).lower()
-                            if "trick room" in evt_str:
-                                if action.actor_build_id in build_ids or f"[of] {team.player_slot}" in evt_str:
-                                    team_set_trickroom = True
-                                    
-                    if "sidestart" in action.tags:
-                        for evt in action.tags["sidestart"]:
-                            evt_str = str(evt).lower()
-                            if "tailwind" in evt_str:
-                                if action.actor_build_id in build_ids or f"[of] {team.player_slot}" in evt_str or f"['{team.player_slot}" in evt_str:
-                                    team_set_tailwind = True
-                    
-        # Gerarchia di classificazione rimossa per favorire archetipi frazionati simultanei
-        assigned_match_archetypes = []
-        
-        if team_set_trickroom:
-            assigned_match_archetypes.append("Trick Room")
-        if boost_stages >= 2:
-            assigned_match_archetypes.append("Setup Sweep")
-        for w in team_weathers:
-            assigned_match_archetypes.append(f"{w} Team" if w else "Weather Team")
-        if team_set_tailwind:
-            assigned_match_archetypes.append("Tailwind Offense")
-        
-        # Balance se non ha attivato altri archetipi aggressivi e il match è durato tanto
-        if not assigned_match_archetypes and N >= 8:
-            assigned_match_archetypes.append("Balance")
-            
-        if not assigned_match_archetypes:
-            assigned_match_archetypes.append("Unclassified")
-            
         # Ponderazione: un team può giocare 50% setup e 50% rain nello stesso match
         weight = 1.0 / len(assigned_match_archetypes)
         for arch in assigned_match_archetypes:
