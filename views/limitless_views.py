@@ -1,9 +1,11 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, 
     QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
-    QTabWidget, QProgressBar, QMessageBox, QDialog, QSpinBox
+    QTabWidget, QProgressBar, QMessageBox, QDialog, QSpinBox,
+    QGraphicsDropShadowEffect, QFrame
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QThread
+from PySide6.QtGui import QColor
 from domain.limitless_scraper import MultiTournamentWorker, TournamentDetailWorker, LimitlessFormatsWorker
 
 from database.connection import SessionLocal
@@ -12,6 +14,7 @@ from sqlalchemy import select
 from collections import defaultdict
 from database.models import Match, Team, PokemonBuild, Turn, TurnAction
 from domain.limitless_scraper import normalize_limitless_pokemon, build_replay_core_dict
+from views.ui_utils import LoadingOverlay
 
 
 
@@ -74,17 +77,139 @@ class LimitlessPokemonBuildDialog(QDialog):
         btn_close.clicked.connect(self.accept)
         layout.addWidget(btn_close)
 
+class LimitlessTeamDetailWorker(QThread):
+    finished_data = Signal(dict)
+    
+    def __init__(self, team_names):
+        super().__init__()
+        self.team_names = team_names
+        
+    def run(self):
+        from database.connection import SessionLocal
+        from sqlalchemy.orm import joinedload
+        from sqlalchemy import select
+        from collections import defaultdict
+        from database.models import Match, Turn, MatchTeam, TeamVariant
+        from domain.limitless_scraper import normalize_limitless_pokemon, build_replay_core_dict
+        from src.analytics.archetypes import analizza_archetipo_team, get_match_team_archetypes
+        
+        session = SessionLocal()
+        try:
+            replay_cores = build_replay_core_dict(session)
+            norm_team = frozenset([normalize_limitless_pokemon(x) for x in self.team_names])
+            
+            data = {
+                "found": False,
+            }
+            
+            if norm_team in replay_cores:
+                t_ids = replay_cores[norm_team]
+                teams = session.query(MatchTeam).filter(MatchTeam.id.in_(t_ids)).all()
+                
+                total_matches = len(teams)
+                wins = 0
+                for t in teams:
+                    if t.match and t.trainer_id == t.match.winner_id:
+                        wins += 1
+                
+                win_rate = round((wins / total_matches) * 100, 2) if total_matches > 0 else 0
+                
+                arch_str = analizza_archetipo_team("Core", t_ids, session).replace("Team Core : ", "")
+                
+                stmt = select(MatchTeam).options(
+                    joinedload(MatchTeam.match).joinedload(Match.teams).joinedload(MatchTeam.variant),
+                    joinedload(MatchTeam.match).joinedload(Match.turns).joinedload(Turn.actions),
+                    joinedload(MatchTeam.variant)
+                ).filter(MatchTeam.id.in_(t_ids))
+
+                full_teams = session.scalars(stmt).unique().all()
+
+                matrix_stats = defaultdict(lambda: defaultdict(lambda: {"wins": 0, "total": 0}))
+                our_all_archs = set()
+                oppo_all_archs = set()
+
+                for t in full_teams:
+                    match = t.match
+                    if not match: continue
+                    oppo_t = next((xt for xt in match.teams if xt.id != t.id), None)
+                    if not oppo_t: continue
+                    
+                    our_archs = get_match_team_archetypes(t, session)
+                    oppo_archs = get_match_team_archetypes(oppo_t, session)
+                    
+                    def clean_arch(a):
+                        import re
+                        return re.sub('<[^<]+>', '', a)
+                        
+                    our_archs = [clean_arch(a) for a in our_archs]
+                    oppo_archs = [clean_arch(a) for a in oppo_archs]
+                    
+                    if not our_archs: our_archs = ["Unclassified"]
+                    if not oppo_archs: oppo_archs = ["Unclassified"]
+                    
+                    is_win = (t.trainer_id == match.winner_id)
+                    
+                    for oa in our_archs:
+                        our_all_archs.add(oa)
+                        for opa in oppo_archs:
+                            oppo_all_archs.add(opa)
+                            matrix_stats[oa][opa]["total"] += 1
+                            if is_win:
+                                matrix_stats[oa][opa]["wins"] += 1
+                                
+                matrix_stats_plain = {}
+                for k, v in matrix_stats.items():
+                    matrix_stats_plain[k] = dict(v)
+
+                data.update({
+                    "found": True,
+                    "total_matches": total_matches,
+                    "wins": wins,
+                    "win_rate": win_rate,
+                    "arch_str": arch_str,
+                    "our_archs": sorted(list(our_all_archs)),
+                    "oppo_archs": sorted(list(oppo_all_archs)),
+                    "matrix_stats": matrix_stats_plain
+                })
+                
+        finally:
+            session.close()
+            
+        self.finished_data.emit(data)
+
+
 class LimitlessTeamDetailDialog(QDialog):
     def __init__(self, team_names, builds, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Dettaglio Team e Build")
         self.setMinimumSize(800, 600)
         
-        layout = QVBoxLayout(self)
+        self.team_names = team_names
+        self.builds = builds
         
-        header = QLabel(f"Dettaglio Team: {', '.join(team_names)}")
+        self.main_layout = QVBoxLayout(self)
+        
+        self.loading_overlay = LoadingOverlay(self)
+        self.loading_overlay.start()
+        
+        self.worker = LimitlessTeamDetailWorker(team_names)
+        self.worker.finished_data.connect(self.build_ui)
+        self.worker.start()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, 'loading_overlay') and self.loading_overlay:
+            self.loading_overlay.resize(self.size())
+
+    def build_ui(self, replay_data):
+        if self.loading_overlay:
+            self.loading_overlay.stop()
+            self.loading_overlay.deleteLater()
+            self.loading_overlay = None
+            
+        header = QLabel(f"Dettaglio Team: {', '.join(self.team_names)}")
         header.setStyleSheet("font-size: 18px; font-weight: bold;")
-        layout.addWidget(header)
+        self.main_layout.addWidget(header)
         
         main_tabs = QTabWidget()
         
@@ -92,21 +217,11 @@ class LimitlessTeamDetailDialog(QDialog):
         replay_tab = QWidget()
         replay_layout = QVBoxLayout(replay_tab)
         
-        session = SessionLocal()
-        replay_cores = build_replay_core_dict(session)
-        norm_team = frozenset([normalize_limitless_pokemon(x) for x in team_names])
-        
-        if norm_team in replay_cores:
-            t_ids = replay_cores[norm_team]
-            teams = session.query(Team).filter(Team.id.in_(t_ids)).all()
-            
-            total_matches = len(teams)
-            wins = 0
-            for t in teams:
-                if t.match and t.trainer_id == t.match.winner_id:
-                    wins += 1
-            
-            win_rate = round((wins / total_matches) * 100, 2) if total_matches > 0 else 0
+        if replay_data.get("found"):
+            total_matches = replay_data["total_matches"]
+            wins = replay_data["wins"]
+            win_rate = replay_data["win_rate"]
+            arch_str = replay_data["arch_str"]
             
             lbl_stats = QLabel(f"Nei replay salvati localmente, questo team ha giocato <b>{total_matches}</b> partite.<br>"
                                f"Vittorie: <b>{wins}</b><br>"
@@ -114,9 +229,6 @@ class LimitlessTeamDetailDialog(QDialog):
                                f"Win Rate: <b>{win_rate}%</b>")
             lbl_stats.setStyleSheet("font-size: 14px;")
             replay_layout.addWidget(lbl_stats)
-            
-            from src.analytics.archetypes import analizza_archetipo_team, get_match_team_archetypes
-            arch_str = analizza_archetipo_team("Core", t_ids, session).replace("Team Core : ", "")
             
             lbl_arch = QLabel(f"Archetipi rilevati in locale: <b>{arch_str}</b>")
             lbl_arch.setStyleSheet("font-size: 14px; margin-top: 10px;")
@@ -127,39 +239,9 @@ class LimitlessTeamDetailDialog(QDialog):
             lbl_matrix.setStyleSheet("font-size: 14px; margin-top: 15px; margin-bottom: 5px;")
             replay_layout.addWidget(lbl_matrix)
             
-            stmt = select(Team).options(
-                joinedload(Team.match).joinedload(Match.teams).joinedload(Team.pokemon_builds),
-                joinedload(Team.match).joinedload(Match.turns).joinedload(Turn.actions),
-                joinedload(Team.pokemon_builds)
-            ).filter(Team.id.in_(t_ids))
-
-            full_teams = session.scalars(stmt).unique().all()
-
-            matrix_stats = defaultdict(lambda: defaultdict(lambda: {"wins": 0, "total": 0}))
-            our_all_archs = set()
-            oppo_all_archs = set()
-
-            for t in full_teams:
-                match = t.match
-                if not match: continue
-                oppo_t = next((xt for xt in match.teams if xt.id != t.id), None)
-                if not oppo_t: continue
-                
-                our_archs = get_match_team_archetypes(t)
-                oppo_archs = get_match_team_archetypes(oppo_t)
-                
-                is_win = (t.trainer_id == match.winner_id)
-                
-                for oa in our_archs:
-                    our_all_archs.add(oa)
-                    for opa in oppo_archs:
-                        oppo_all_archs.add(opa)
-                        matrix_stats[oa][opa]["total"] += 1
-                        if is_win:
-                            matrix_stats[oa][opa]["wins"] += 1
-
-            our_archs_sorted = sorted(list(our_all_archs))
-            oppo_archs_sorted = sorted(list(oppo_all_archs))
+            our_archs_sorted = replay_data["our_archs"]
+            oppo_archs_sorted = replay_data["oppo_archs"]
+            matrix_stats = replay_data["matrix_stats"]
             
             if our_archs_sorted and oppo_archs_sorted:
                 table_matrix = QTableWidget()
@@ -172,7 +254,7 @@ class LimitlessTeamDetailDialog(QDialog):
                 
                 for r_idx, r_arch in enumerate(our_archs_sorted):
                     for c_idx, c_arch in enumerate(oppo_archs_sorted):
-                        stats = matrix_stats[r_arch][c_arch]
+                        stats = matrix_stats[r_arch].get(c_arch, {"total": 0})
                         if stats["total"] > 0:
                             wr = round((stats["wins"] / stats["total"]) * 100)
                             cell_text = f"{wr}% ({stats['total']})"
@@ -190,8 +272,6 @@ class LimitlessTeamDetailDialog(QDialog):
                 lbl_no_matrix.setStyleSheet("color: gray; font-style: italic;")
                 replay_layout.addWidget(lbl_no_matrix)
                 
-            # --- Fine Matrice dei Matchup ---
-
             replay_layout.addStretch()
         else:
             lbl_stats = QLabel("Questo team esatto (6 Pokémon) non è mai stato registrato nei replay del database locale.")
@@ -199,23 +279,21 @@ class LimitlessTeamDetailDialog(QDialog):
             replay_layout.addWidget(lbl_stats)
             replay_layout.addStretch()
             
-        session.close()
-        
         main_tabs.addTab(replay_tab, "Statistiche Replay (Locale)")
         
-        for p in team_names:
-            b_data = builds.get(p, {'items': {}, 'abilities': {}, 'natures': {}, 'evs': {}, 'moves': {}, 'count': 0})
+        for p in self.team_names:
+            b_data = self.builds.get(p, {'items': {}, 'abilities': {}, 'natures': {}, 'evs': {}, 'moves': {}, 'count': 0})
             usage = b_data.get('count', 0)
             if usage == 0: usage = 1
             
             p_widget = create_pokemon_build_widget(p, usage, b_data)
             main_tabs.addTab(p_widget, p)
             
-        layout.addWidget(main_tabs)
+        self.main_layout.addWidget(main_tabs)
         
         btn_close = QPushButton("Chiudi")
         btn_close.clicked.connect(self.accept)
-        layout.addWidget(btn_close)
+        self.main_layout.addWidget(btn_close)
 
 
 class LimitlessTournamentsWidget(QWidget):
@@ -226,8 +304,22 @@ class LimitlessTournamentsWidget(QWidget):
         self.parent_main = parent_main
         self.current_data = {}
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
 
-        top_layout = QHBoxLayout()
+        # Controls Header
+        self.controls_container = QFrame()
+        self.controls_container.setFixedHeight(68)
+        self.controls_container.setStyleSheet("background-color: #111; border: 1px solid #222; border-radius: 6px;")
+        
+        shadow = QGraphicsDropShadowEffect()
+        shadow.setBlurRadius(15)
+        shadow.setColor(QColor(0, 0, 0, 120))
+        shadow.setOffset(0, 4)
+        self.controls_container.setGraphicsEffect(shadow)
+        
+        top_layout = QHBoxLayout(self.controls_container)
+        top_layout.setContentsMargins(15, 10, 15, 10)
+        
         top_layout.addWidget(QLabel("Formato:"))
         
         self.combo_format = QComboBox()
@@ -246,7 +338,7 @@ class LimitlessTournamentsWidget(QWidget):
         top_layout.addWidget(self.btn_refresh)
         top_layout.addStretch()
         
-        layout.addLayout(top_layout)
+        layout.addWidget(self.controls_container)
         
         self.lbl_status = QLabel("")
         layout.addWidget(self.lbl_status)
@@ -303,6 +395,8 @@ class LimitlessTournamentsWidget(QWidget):
 
         layout.addWidget(self.tabs)
         
+        self.loading_overlay = LoadingOverlay(self.tabs)
+        
         # Load formats on start
         self.format_worker = LimitlessFormatsWorker()
         self.format_worker.finished.connect(self.on_formats_loaded)
@@ -328,6 +422,8 @@ class LimitlessTournamentsWidget(QWidget):
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, 0)
         self.current_data = {}
+        
+        self.loading_overlay.start()
         
         self.table.setSortingEnabled(False)
         self.table_teams.setSortingEnabled(False)
@@ -396,7 +492,13 @@ class LimitlessTournamentsWidget(QWidget):
             item_pct = QTableWidgetItem()
             item_pct.setData(Qt.DisplayRole, round(pct, 1))
             self.table_teams.setItem(i, 2, item_pct)
-            self.table_teams.setItem(i, 3, QTableWidgetItem(archetype))
+            item_arch = QTableWidgetItem(archetype) # Testo nascosto per il sort
+            self.table_teams.setItem(i, 3, item_arch)
+            lbl_arch = QLabel(archetype)
+            lbl_arch.setTextFormat(Qt.RichText)
+            lbl_arch.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            lbl_arch.setStyleSheet("padding: 2px;")
+            self.table_teams.setCellWidget(i, 3, lbl_arch)
             self.table_teams.setItem(i, 4, QTableWidgetItem(wr))
             
         pokemons = data.get('pokemon_usage', [])
@@ -423,6 +525,7 @@ class LimitlessTournamentsWidget(QWidget):
         self.combo_format.setEnabled(True)
         self.spin_count.setEnabled(True)
         self.progress_bar.setVisible(False)
+        self.loading_overlay.stop()
         self.lbl_status.setText("Importazione e calcolo build completati.")
 
     def on_load_error(self, err):
@@ -430,6 +533,7 @@ class LimitlessTournamentsWidget(QWidget):
         self.combo_format.setEnabled(True)
         self.spin_count.setEnabled(True)
         self.progress_bar.setVisible(False)
+        self.loading_overlay.stop()
         self.lbl_status.setText("Errore.")
         QMessageBox.critical(self, "Errore", f"Impossibile caricare i tornei: {err}")
 
@@ -479,9 +583,10 @@ class LimitlessTournamentDetailWidget(QWidget):
         self.btn_back.clicked.connect(self.back_requested.emit)
         top_layout.addWidget(self.btn_back)
         
-        self.lbl_title = QLabel("Dettaglio Torneo")
-        self.lbl_title.setStyleSheet("font-size: 18px; font-weight: bold;")
+        self.lbl_title = QLabel("")
+        self.lbl_title.setStyleSheet("font-size: 18px; font-weight: bold; margin-left: 20px;")
         top_layout.addWidget(self.lbl_title)
+        
         top_layout.addStretch()
         layout.addLayout(top_layout)
         
@@ -537,6 +642,8 @@ class LimitlessTournamentDetailWidget(QWidget):
         self.tabs.addTab(self.tab_pokemon, "Usage Pokémon")
         
         layout.addWidget(self.tabs)
+        
+        self.loading_overlay = LoadingOverlay(self.tabs)
 
     def load_tournament(self, tournament_id, tournament_name):
         self.lbl_title.setText(f"Torneo: {tournament_name}")
@@ -544,6 +651,8 @@ class LimitlessTournamentDetailWidget(QWidget):
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, 0)
         self.current_data = {}
+        
+        self.loading_overlay.start()
         
         self.table_standings.setSortingEnabled(False)
         self.table_teams.setSortingEnabled(False)
@@ -612,7 +721,13 @@ class LimitlessTournamentDetailWidget(QWidget):
             item_pct = QTableWidgetItem()
             item_pct.setData(Qt.DisplayRole, round(pct, 1))
             self.table_teams.setItem(i, 2, item_pct)
-            self.table_teams.setItem(i, 3, QTableWidgetItem(archetype))
+            item_arch = QTableWidgetItem(archetype)
+            self.table_teams.setItem(i, 3, item_arch)
+            lbl_arch = QLabel(archetype)
+            lbl_arch.setTextFormat(Qt.RichText)
+            lbl_arch.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            lbl_arch.setStyleSheet("padding: 2px;")
+            self.table_teams.setCellWidget(i, 3, lbl_arch)
             self.table_teams.setItem(i, 4, QTableWidgetItem(wr))
             
         pokemons = data.get('pokemon_usage', [])
@@ -635,10 +750,12 @@ class LimitlessTournamentDetailWidget(QWidget):
     def on_load_finished(self, data):
         self.update_tables(data)
         self.progress_bar.setVisible(False)
+        self.loading_overlay.stop()
         self.lbl_status.setText("Estrazione build completata.")
 
     def on_load_error(self, err):
         self.progress_bar.setVisible(False)
+        self.loading_overlay.stop()
         self.lbl_status.setText("Errore durante il caricamento.")
         QMessageBox.critical(self, "Errore", f"Impossibile caricare i dettagli: {err}")
 

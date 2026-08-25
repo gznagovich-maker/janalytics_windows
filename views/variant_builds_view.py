@@ -6,11 +6,13 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Signal
 from database.connection import SessionLocal
-from database.models import PokemonBuild, Team
+from database.models import MatchTeam, TeamVariant, PokemonSet
 from views.team_analysis_view import get_pokemon_pixmap
+from config.theme import Palette
 
 class VariantBuildsWidget(QWidget):
     back_signal = Signal()
+    import_signal = Signal(str)
     
     def __init__(self):
         super().__init__()
@@ -18,21 +20,23 @@ class VariantBuildsWidget(QWidget):
         
         main_layout = QVBoxLayout(self)
         
-        header_layout = QGridLayout()
-        self.btn_back = QPushButton("Indietro")
-        self.btn_back.setFixedWidth(100)
+        header_layout = QHBoxLayout()
+        self.btn_back = QPushButton("🔙 Torna all'analisi archetipi")
+        self.btn_back.setFixedWidth(200)
         self.btn_back.setCursor(Qt.PointingHandCursor)
         self.btn_back.clicked.connect(self.back_signal.emit)
         
-        self.lbl_title = QLabel("Dettaglio Build Variante")
-        self.lbl_title.setAlignment(Qt.AlignCenter)
-        self.lbl_title.setStyleSheet("font-size: 20px; font-weight: bold; color: #B6FAF5;")
+        header_layout.addWidget(self.btn_back)
         
-        header_layout.addWidget(self.btn_back, 0, 0, Qt.AlignLeft)
-        header_layout.addWidget(self.lbl_title, 0, 1, Qt.AlignCenter)
-        header_layout.setColumnStretch(0, 1)
-        header_layout.setColumnStretch(1, 2)
-        header_layout.setColumnStretch(2, 1)
+        self.btn_import = QPushButton("📥 Importa in Costruisci e Confronta")
+        self.btn_import.setCursor(Qt.PointingHandCursor)
+        self.btn_import.setStyleSheet(
+            f"background-color: {Palette.TERTIARY}; color: {Palette.TEXT_PRIMARY}; padding: 6px 12px; border-radius: 4px; font-weight: bold;"
+        )
+        self.btn_import.clicked.connect(self.on_import_clicked)
+        header_layout.addWidget(self.btn_import)
+        
+        header_layout.addStretch()
         
         main_layout.addLayout(header_layout)
         
@@ -58,6 +62,7 @@ class VariantBuildsWidget(QWidget):
 
     def load_variant(self, variant: dict):
         self.variant_data = variant
+        self.current_most_common_paste = ""
         
         while self.content_layout.count():
             item = self.content_layout.takeAt(0)
@@ -67,7 +72,35 @@ class VariantBuildsWidget(QWidget):
         match_ids = [m["id"] for m in variant["match_ids"]]
         
         session = SessionLocal()
-        builds = session.query(PokemonBuild).join(Team).filter(Team.match_id.in_(match_ids)).all()
+        
+        chunk_size = 500
+        
+        team_ids_list = list(variant["team_ids"])
+        match_teams = []
+        for i in range(0, len(team_ids_list), chunk_size):
+            chunk = team_ids_list[i:i+chunk_size]
+            if chunk:
+                match_teams.extend(session.query(MatchTeam).filter(MatchTeam.id.in_(chunk)).all())
+        
+        variant_ids_list = list(set([mt.team_variant_id for mt in match_teams if mt.team_variant_id]))
+        team_variants = []
+        for i in range(0, len(variant_ids_list), chunk_size):
+            chunk = variant_ids_list[i:i+chunk_size]
+            if chunk:
+                team_variants.extend(session.query(TeamVariant).filter(TeamVariant.id.in_(chunk)).all())
+        
+        set_ids = set()
+        for tv in team_variants:
+            if tv.pokemon_set_ids:
+                for sid in tv.pokemon_set_ids:
+                    set_ids.add(sid)
+                    
+        set_ids_list = list(set_ids)
+        builds = []
+        for i in range(0, len(set_ids_list), chunk_size):
+            chunk = set_ids_list[i:i+chunk_size]
+            if chunk:
+                builds.extend(session.query(PokemonSet).filter(PokemonSet.id.in_(chunk)).all())
         
         species_builds = {}
         for b in builds:
@@ -92,7 +125,7 @@ class VariantBuildsWidget(QWidget):
             
             for b in sp_builds:
                 if b.item_id: items[b.item_id] += 1
-                if b.ability and b.ability.name: abilities[b.ability.name] += 1
+                if b.ability_id: abilities[b.ability_id] += 1
                 if b.tera_type: teras[b.tera_type] += 1
                 if b.nature: natures[b.nature] += 1
                 if b.moves:
@@ -102,6 +135,24 @@ class VariantBuildsWidget(QWidget):
                         
             card = self.create_build_card(sp, len(sp_builds), items, abilities, teras, natures, moves)
             self.content_layout.addWidget(card, row, col)
+            
+            # Generate paste for this species
+            top_item = items.most_common(1)[0][0] if items else ""
+            top_ability = abilities.most_common(1)[0][0] if abilities else ""
+            top_moves = [m[0] for m in moves.most_common(4)]
+            
+            header = sp.capitalize()
+            if top_item:
+                header += f" @ {top_item}"
+            self.current_most_common_paste += f"{header}\n"
+            
+            if top_ability:
+                self.current_most_common_paste += f"Ability: {top_ability}\n"
+                
+            for m in top_moves:
+                self.current_most_common_paste += f"- {m}\n"
+                
+            self.current_most_common_paste += "\n"
             
             col += 1
             if col > 2:
@@ -115,7 +166,7 @@ class VariantBuildsWidget(QWidget):
         from database.models import Match, Turn, TurnAction
         
         matches_db = session.query(Match).options(
-            joinedload(Match.teams).joinedload(Team.pokemon_builds),
+            joinedload(Match.teams).joinedload(MatchTeam.variant),
             joinedload(Match.turns).joinedload(Turn.actions)
         ).filter(Match.id.in_(match_ids)).all()
         
@@ -140,8 +191,20 @@ class VariantBuildsWidget(QWidget):
             if not our_team or not opp_team:
                 continue
                 
-            our_archs = get_match_team_archetypes(our_team)
-            opp_archs = get_match_team_archetypes(opp_team)
+            our_archs = get_match_team_archetypes(our_team, session)
+            opp_archs = get_match_team_archetypes(opp_team, session)
+            
+            # Rimuoviamo l'HTML, prendiamo solo il testo base per la tabella
+            def clean_arch(a):
+                import re
+                return re.sub('<[^<]+>', '', a)
+                
+            our_archs = [clean_arch(a) for a in our_archs]
+            opp_archs = [clean_arch(a) for a in opp_archs]
+            
+            if not our_archs: our_archs = ["Unclassified"]
+            if not opp_archs: opp_archs = ["Unclassified"]
+            
             is_win = (m.winner_id == our_team.trainer_id)
             
             for oa in our_archs:
@@ -185,12 +248,11 @@ class VariantBuildsWidget(QWidget):
                     table.setItem(i, j * 2, wr_item)
                     table.setItem(i, j * 2 + 1, count_item)
             
-            table.setStyleSheet("QTableWidget { background-color: #1A1A1A; color: white; border: 1px solid #333; gridline-color: #444; } QHeaderView::section { background-color: #222; color: #aaffaa; border: 1px solid #333; padding: 4px; font-weight: bold; }")
             table.resizeColumnsToContents()
             table.setMinimumHeight(150 + (len(all_our_archs) * 35))
             
             lbl_table = QLabel("Rapporti Matchup")
-            lbl_table.setStyleSheet("font-size: 16px; font-weight: bold; color: #aaffaa; margin-top: 20px; margin-bottom: 10px;")
+            lbl_table.setStyleSheet("font-size: 18px; font-weight: 700; color: #C49A3C; margin-top: 24px; margin-bottom: 12px;")
             
             next_row = row + 1 if col > 0 else row
             self.content_layout.addWidget(lbl_table, next_row, 0, 1, 3)
@@ -200,8 +262,9 @@ class VariantBuildsWidget(QWidget):
                 
     def create_build_card(self, species, count, items, abilities, teras, natures, moves) -> QFrame:
         frame = QFrame()
+        frame.setObjectName("card_elevated")
         frame.setFrameShape(QFrame.StyledPanel)
-        frame.setStyleSheet("QFrame { background-color: #1A1A1A; border: 1px solid #333; border-radius: 8px; } QLabel { border: none; background: transparent; }")
+        frame.setStyleSheet("QLabel { border: none; background: transparent; }")
         
         layout = QVBoxLayout(frame)
         
@@ -210,7 +273,7 @@ class VariantBuildsWidget(QWidget):
         pixmap = get_pokemon_pixmap(species, 48)
         if pixmap and not pixmap.isNull():
             icon_lbl.setPixmap(pixmap)
-        title_lbl = QLabel(f"<b>{species.capitalize()}</b> <span style='font-size:12px; color:#888;'>({count} uses)</span>")
+        title_lbl = QLabel(f"<b style='color: #DEDAD4;'>{species.capitalize()}</b> <span style='font-size:12px; color:#6E7285;'>({count} uses)</span>")
         title_lbl.setStyleSheet("font-size: 16px;")
         
         title_layout.addWidget(icon_lbl)
@@ -228,13 +291,17 @@ class VariantBuildsWidget(QWidget):
             return "<br>".join(lines)
             
         info = QLabel(
-            f"<span style='color:#aaffaa;'><b>Strumenti:</b></span><br>{format_percentages(items, count, 3)}<br>"
-            f"<span style='color:#aaffaa;'><b>Abilità:</b></span><br>{format_percentages(abilities, count, 3)}<br>"
-            f"<span style='color:#aaffaa;'><b>Tera:</b></span><br>{format_percentages(teras, count, 3)}<br>"
-            f"<span style='color:#aaffaa;'><b>Nature:</b></span><br>{format_percentages(natures, count, 3)}<br>"
-            f"<span style='color:#aaffaa;'><b>Mosse:</b></span><br>{format_percentages(moves, count, 6)}"
+            f"<span style='color:#A69ACA; font-weight:600;'>Strumenti:</span><br>{format_percentages(items, count, 3)}<br>"
+            f"<span style='color:#A69ACA; font-weight:600;'>Abilità:</span><br>{format_percentages(abilities, count, 3)}<br>"
+            f"<span style='color:#A69ACA; font-weight:600;'>Tera:</span><br>{format_percentages(teras, count, 3)}<br>"
+            f"<span style='color:#A69ACA; font-weight:600;'>Nature:</span><br>{format_percentages(natures, count, 3)}<br>"
+            f"<span style='color:#A69ACA; font-weight:600;'>Mosse:</span><br>{format_percentages(moves, count, 6)}"
         )
         layout.addWidget(info)
         
         layout.addStretch()
         return frame
+
+    def on_import_clicked(self):
+        if self.current_most_common_paste:
+            self.import_signal.emit(self.current_most_common_paste.strip())

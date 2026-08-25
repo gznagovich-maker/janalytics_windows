@@ -14,7 +14,8 @@ class ReplayListWidget(BaseHeaderWidget):
     replay_selected = Signal(str)
 
     def __init__(self):
-        super().__init__("Libreria Replay VGC")
+        super().__init__("")
+        self.header_label.hide()
 
         self.current_page = 1
         self.items_per_page = 20
@@ -51,11 +52,11 @@ class ReplayListWidget(BaseHeaderWidget):
         self.btn_select_all.clicked.connect(self.select_all_replays)
         
         self.btn_delete_selected = QPushButton("Elimina Selezionati")
-        self.btn_delete_selected.setStyleSheet("background-color: #e74c3c; color: white; border-bottom: 3px solid #c0392b;")
+        self.btn_delete_selected.setProperty("class", "danger")
         self.btn_delete_selected.clicked.connect(self.delete_selected_replays)
 
         self.btn_clear_db = QPushButton("Pulisci DB")
-        self.btn_clear_db.setStyleSheet("background-color: #8b0000; color: white; border-bottom: 3px solid #5a0000;")
+        self.btn_clear_db.setProperty("class", "danger")
         self.btn_clear_db.clicked.connect(self.clear_database)
         
         mass_actions_layout.addWidget(self.btn_select_all)

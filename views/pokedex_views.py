@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 from database.connection import SessionLocal
-from database.models import PokemonSpecies, PokemonBuild
+from database.models import PokemonSpecies, PokemonSet
 from views.base_view import BaseHeaderWidget
 
 class PokedexWidget(BaseHeaderWidget):
@@ -123,7 +123,7 @@ class PokedexWidget(BaseHeaderWidget):
                 bar.setStyleSheet(f"QProgressBar::chunk {{ background-color: {color}; }}")
                 
             # Usage
-            usage_count = session.query(PokemonBuild).filter_by(species_id=pkmn_id).count()
+            usage_count = session.query(PokemonSet).filter_by(species_id=pkmn_id).count()
             self.lbl_usage.setText(f"Utilizzi registrati in partita: {usage_count}")
                 
         finally:

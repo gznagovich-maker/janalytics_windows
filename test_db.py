@@ -3,7 +3,7 @@ import uuid
 from src.parser.showdown import ShowdownParser, parse_showdown_log
 from database.connection import init_db, SessionLocal
 from database.repository import save_parsed_match_to_db
-from database.models import Match, PokemonBuild, TurnAction
+from database.models import Match, PokemonSet, TurnAction, MatchTeam, TeamVariant
 
 # 1. Inizializza il database (crea il file vgc_replays.db e le tabelle)
 init_db()
@@ -70,10 +70,18 @@ def run_test():
         saved_match = session.query(Match).filter_by(id=match_id).first()
         print(f"Match Trovato: {saved_match.id}")
 
-        builds = session.query(PokemonBuild).filter(PokemonBuild.team.has(match_id=match_id)).all()
+        match_teams = session.query(MatchTeam).filter_by(match_id=match_id).all()
+        variant_ids = [mt.team_variant_id for mt in match_teams]
+        variants = session.query(TeamVariant).filter(TeamVariant.id.in_(variant_ids)).all()
+        set_ids = set()
+        for v in variants:
+            if v.pokemon_set_ids:
+                set_ids.update(v.pokemon_set_ids)
+        builds = session.query(PokemonSet).filter(PokemonSet.id.in_(set_ids)).all()
+        
         print(f"Pokemon salvati per questo match: {len(builds)}")
         for b in builds[:4]:
-            print(f" - {b.species_id} (Team ID: {b.team_id})")
+            print(f" - {b.species_id}")
 
         actions = session.query(TurnAction).filter(TurnAction.turn.has(match_id=match_id)).all()
         print(f"\nAzioni di turno salvate: {len(actions)}")

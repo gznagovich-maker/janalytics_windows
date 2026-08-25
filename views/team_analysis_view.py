@@ -1,8 +1,10 @@
 import os
+from config.theme import Palette, Spacing
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem, 
     QHeaderView, QLabel, QTreeWidget, QTreeWidgetItem, QPushButton, QSplitter,
-    QApplication, QMessageBox, QComboBox, QLineEdit, QSpinBox, QFileDialog
+    QApplication, QMessageBox, QComboBox, QLineEdit, QSpinBox, QFileDialog,
+    QGraphicsDropShadowEffect, QFrame, QSizePolicy
 )
 from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QPixmap, QBrush, QColor, QFont
@@ -43,7 +45,10 @@ def create_team_icons_widget(species_list: list) -> QWidget:
             lbl.setToolTip(sp.capitalize())
         else:
             lbl.setText(sp.capitalize())
-            lbl.setStyleSheet("font-size: 10px; color: #ccc; border: 1px solid #555; padding: 2px; border-radius: 4px;")
+            lbl.setStyleSheet(
+                f"font-size: 10px; color: {Palette.TEXT_MUTED};"
+                f"border: 1px solid {Palette.BORDER_LIGHT}; padding: 2px; border-radius: 4px;"
+            )
         layout.addWidget(lbl)
         
     layout.addStretch()
@@ -57,47 +62,95 @@ class TeamAnalysisWidget(QWidget):
         self.groupings = []
         
         main_layout = QVBoxLayout(self)
-        
-        header_label = QLabel("Analisi e Clustering dei Team per Archetipi")
-        header_label.setFixedHeight(124)
-        header_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        header_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #B6FAF5; margin-bottom: 10px; background-color: #0A0A0A; border: 1px solid #1A1A1A; border-radius: 6px;")
-        main_layout.addWidget(header_label)
+        main_layout.setContentsMargins(20, 20, 20, 20)
         
         # --- SEZIONE FILTRI ---
         filters_container = QWidget()
-        filters_container.setFixedHeight(68)
-        filters_container.setStyleSheet("background-color: #111; border: 1px solid #222; border-radius: 6px;")
+        filters_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        filters_container.setStyleSheet(
+            f"background-color: {Palette.BG_SURFACE};"
+            f"border: 1px solid {Palette.BORDER_COLOR};"
+            "border-radius: 10px;"
+        )
+        
+        shadow = QGraphicsDropShadowEffect()
+        shadow.setBlurRadius(15)
+        shadow.setColor(QColor(0, 0, 0, 120))
+        shadow.setOffset(0, 4)
+        filters_container.setGraphicsEffect(shadow)
+        
         filters_main_layout = QVBoxLayout(filters_container)
-        filters_main_layout.setContentsMargins(5, 5, 5, 5)
+        filters_main_layout.setContentsMargins(16, 12, 16, 12)  # Grid 8pt
+        filters_main_layout.setSpacing(10)
         
         # Riga 1: Filtri Database (Ricalcolo Necessario)
         db_filters_layout = QHBoxLayout()
+        db_filters_layout.setSpacing(10)
         db_lbl = QLabel("Filtri Dati Base:")
-        db_lbl.setStyleSheet("color: #aaffaa; font-weight: bold;")
+        db_lbl.setStyleSheet(
+            f"color: {Palette.TERTIARY}; font-weight: 700; font-size: 12px;"
+            "text-transform: uppercase; letter-spacing: 0.5px;"
+        )
+        db_lbl.setFixedWidth(110)
         
         lbl_format = QLabel("Regolamentazione:")
+        lbl_format.setStyleSheet(f"color: {Palette.TEXT_MUTED}; font-size: 13px;")
         self.cmb_format = QComboBox()
+        self.cmb_format.setFixedWidth(160)
         session = SessionLocal()
         formats = [f[0] for f in session.query(Match.format).distinct().all() if f[0]]
         session.close()
         self.cmb_format.addItems(["Tutti"] + formats)
         
         lbl_trainer = QLabel("Allenatore:")
+        lbl_trainer.setStyleSheet(f"color: {Palette.TEXT_MUTED}; font-size: 13px;")
         self.txt_trainer = QLineEdit()
         self.txt_trainer.setPlaceholderText("Es. Wolfey...")
+        self.txt_trainer.setFixedWidth(120)
         
         lbl_dist = QLabel("Distanza Varianti (D):")
+        lbl_dist.setStyleSheet(f"color: {Palette.TEXT_MUTED}; font-size: 13px;")
         self.spn_distance = QSpinBox()
         self.spn_distance.setRange(0, 6)
         self.spn_distance.setValue(2)
+        self.spn_distance.setFixedWidth(60)
         
         self.btn_calc = QPushButton("Calcola Raggruppamenti")
-        self.btn_calc.setStyleSheet("background-color: #444; color: white; padding: 4px 10px; font-weight: bold; border-radius: 4px;")
+        self.btn_calc.setStyleSheet(
+            "QPushButton {"
+            "  background-color: #C49A3C;"
+            "  color: #000000;"
+            "  border: none;"
+            "  font-weight: 700;"
+            "  font-size: 13px;"
+            "  padding: 7px 16px;"
+            "  border-radius: 5px;"
+            "  min-height: 34px;"
+            "  letter-spacing: 0.2px;"
+            "}"
+            "QPushButton:hover {"
+            "  background-color: #D4AA52;"
+            "  color: #000000;"
+            "}"
+            "QPushButton:pressed {"
+            "  background-color: #7A6025;"
+            "  color: #DEDAD4;"
+            "}"
+            "QPushButton:disabled {"
+            "  background-color: #2A2315;"
+            "  color: #4A3E20;"
+            "}"
+        )
         self.btn_calc.clicked.connect(self.load_data)
 
+
         self.btn_export = QPushButton("Esporta Log Azioni")
-        self.btn_export.setStyleSheet("background-color: #664444; color: white; padding: 4px 10px; font-weight: bold; border-radius: 4px;")
+        self.btn_export.setStyleSheet(
+            f"background-color: {Palette.BG_SURFACE_ELEVATED};"
+            f"color: {Palette.TEXT_MUTED};"
+            f"border: 1px solid {Palette.BORDER_LIGHT};"
+            "padding: 6px 12px; font-weight: 600; border-radius: 7px;"
+        )
         self.btn_export.clicked.connect(self.export_unrecognized_log)
         
         db_filters_layout.addWidget(db_lbl)
@@ -107,17 +160,29 @@ class TeamAnalysisWidget(QWidget):
         db_filters_layout.addWidget(self.txt_trainer)
         db_filters_layout.addWidget(lbl_dist)
         db_filters_layout.addWidget(self.spn_distance)
+        db_filters_layout.addStretch()
         db_filters_layout.addWidget(self.btn_calc)
         db_filters_layout.addWidget(self.btn_export)
-        db_filters_layout.addStretch()
+        
+        # Separatore sottile tra le due righe
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setStyleSheet(f"background-color: {Palette.BORDER_COLOR}; max-height: 1px; border: none;")
         
         # Riga 2: Filtri Vista (Immediati)
         view_filters_layout = QHBoxLayout()
+        view_filters_layout.setSpacing(10)
         view_lbl = QLabel("Filtri Visualizzazione:")
-        view_lbl.setStyleSheet("color: #B6FAF5; font-weight: bold;")
+        view_lbl.setStyleSheet(
+            f"color: {Palette.PRIMARY}; font-weight: 700; font-size: 12px;"
+            "text-transform: uppercase; letter-spacing: 0.5px;"
+        )
+        view_lbl.setFixedWidth(110)
         
         lbl_arch = QLabel("Archetipo:")
+        lbl_arch.setStyleSheet(f"color: {Palette.TEXT_MUTED}; font-size: 13px;")
         self.cmb_archetype = QComboBox()
+        self.cmb_archetype.setFixedWidth(175)
         self.cmb_archetype.addItems([
             "Tutti", 
             "Setup Sweeper / Setter", 
@@ -130,26 +195,34 @@ class TeamAnalysisWidget(QWidget):
         self.cmb_archetype.currentIndexChanged.connect(self.populate_table)
         
         lbl_poke = QLabel("Pokémon:")
+        lbl_poke.setStyleSheet(f"color: {Palette.TEXT_MUTED}; font-size: 13px;")
         self.txt_pokemon = QLineEdit()
         self.txt_pokemon.setPlaceholderText("Es. Incineroar...")
+        self.txt_pokemon.setFixedWidth(120)
         self.txt_pokemon.textChanged.connect(self.populate_table)
         
         lbl_min_wr = QLabel("Min WR (%):")
+        lbl_min_wr.setStyleSheet(f"color: {Palette.TEXT_MUTED}; font-size: 13px;")
         self.spn_min_wr = QSpinBox()
         self.spn_min_wr.setRange(0, 100)
         self.spn_min_wr.setValue(0)
+        self.spn_min_wr.setFixedWidth(60)
         self.spn_min_wr.valueChanged.connect(self.populate_table)
         
         lbl_max_wr = QLabel("Max WR (%):")
+        lbl_max_wr.setStyleSheet(f"color: {Palette.TEXT_MUTED}; font-size: 13px;")
         self.spn_max_wr = QSpinBox()
         self.spn_max_wr.setRange(0, 100)
         self.spn_max_wr.setValue(100)
+        self.spn_max_wr.setFixedWidth(60)
         self.spn_max_wr.valueChanged.connect(self.populate_table)
         
         lbl_min_match = QLabel("Min Match:")
+        lbl_min_match.setStyleSheet(f"color: {Palette.TEXT_MUTED}; font-size: 13px;")
         self.spn_min_match = QSpinBox()
         self.spn_min_match.setRange(1, 9999)
         self.spn_min_match.setValue(1)
+        self.spn_min_match.setFixedWidth(65)
         self.spn_min_match.valueChanged.connect(self.populate_table)
         
         view_filters_layout.addWidget(view_lbl)
@@ -166,6 +239,7 @@ class TeamAnalysisWidget(QWidget):
         view_filters_layout.addStretch()
         
         filters_main_layout.addLayout(db_filters_layout)
+        filters_main_layout.addWidget(separator)
         filters_main_layout.addLayout(view_filters_layout)
         
         main_layout.addWidget(filters_container)
@@ -195,7 +269,7 @@ class TeamAnalysisWidget(QWidget):
         detail_layout = QVBoxLayout(right_widget)
         
         self.lbl_detail_title = QLabel("Seleziona un Raggruppamento")
-        self.lbl_detail_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #FAB7F0;")
+        self.lbl_detail_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #C2BFBC;")
         
         self.tree_variants = QTreeWidget()
         self.tree_variants.setHeaderHidden(True)
@@ -216,26 +290,33 @@ class TeamAnalysisWidget(QWidget):
         main_layout.addWidget(splitter)
         
     def load_data(self):
-        self.btn_calc.setText("Calcolo in corso...")
+        self.btn_calc.setText("⟳  Calcolo in corso...")
         self.btn_calc.setEnabled(False)
+
+        # Mostra spinner globale se accessibile tramite la gerarchia dei widget
+        main_win = self.window()
+        if hasattr(main_win, "show_loading"):
+            main_win.show_loading("Calcolo raggruppamenti...")
         QApplication.processEvents()
-        
+
         try:
-            # Passiamo il parametro distanza al calcolo
             dist = self.spn_distance.value()
             fmt = self.cmb_format.currentText()
             trainer = self.txt_trainer.text().strip()
             self.groupings = get_team_archetypes_and_groupings(
-                max_distance=dist, 
-                format_filter=fmt, 
+                max_distance=dist,
+                format_filter=fmt,
                 trainer_filter=trainer
             )
             self.populate_table()
         except Exception as e:
             QMessageBox.critical(self, "Errore", f"Errore nel calcolo: {e}")
         finally:
+            if hasattr(main_win, "hide_loading"):
+                main_win.hide_loading()
             self.btn_calc.setText("Calcola Raggruppamenti")
             self.btn_calc.setEnabled(True)
+
 
     def export_unrecognized_log(self):
         file_path, _ = QFileDialog.getSaveFileName(self, "Salva Log Azioni Non Riconosciute", "unrecognized_actions.txt", "Text Files (*.txt)")
@@ -278,10 +359,7 @@ class TeamAnalysisWidget(QWidget):
                 
                 for v in g['variants']:
                     for a in v['archetypes']:
-                        # Isoliamo la parte degli archetipi (dopo i due punti)
-                        arch_part = a.lower().split(":")
-                        arch_part = arch_part[1] if len(arch_part) > 1 else a.lower()
-                        if search_term in arch_part:
+                        if search_term in a.lower():
                             has_arch = True
                             break
                     if has_arch:
@@ -368,23 +446,12 @@ class TeamAnalysisWidget(QWidget):
         lbl_info.setFixedWidth(100)
         layout.addWidget(lbl_info)
         
-        arch_str = variant.get("archetypes", [""])[0]
-        parts = arch_str.split(" : ")
-        arch_data = parts[1].split() if len(parts) > 1 else []
-        
-        formatted_archs = []
-        for a in arch_data:
-            if ":" in a:
-                name, pct = a.split(":")
-                if name == "SetupSweep": name = "Setup Sweep"
-                if name == "HardTrickRoom": name = "Hard Trick Room"
-                if name == "TailwindOffense": name = "Tailwind Offense"
-                formatted_archs.append(f"<span style='color:#aaffaa;'>{name}: {pct}</span>")
-            else:
-                formatted_archs.append(f"<span style='color:#aaffaa;'>{a}</span>")
-                
-        arch_html = "<br>".join(formatted_archs) if formatted_archs else "<span style='color:#aaa;'>Nessun dato</span>"
+        arch_html = variant.get("archetypes", [""])[0]
+        if not arch_html:
+            arch_html = "<span style='color:#aaa;'>Nessun dato</span>"
+            
         lbl_arch = QLabel(arch_html)
+        lbl_arch.setTextFormat(Qt.RichText)
         lbl_arch.setStyleSheet("font-size: 11px;")
         lbl_arch.setFixedWidth(140)
         layout.addWidget(lbl_arch)
@@ -394,7 +461,7 @@ class TeamAnalysisWidget(QWidget):
         
         btn_builds = QPushButton("Builds")
         btn_builds.setCursor(Qt.PointingHandCursor)
-        btn_builds.setStyleSheet("background-color: #B6FAF5; color: #0A0A0A; padding: 4px 12px; border-radius: 4px; font-weight: bold;")
+        btn_builds.setStyleSheet("background-color: #B8A9B7; color: #0A0A0A; padding: 4px 12px; border-radius: 4px; font-weight: bold;")
         btn_builds.clicked.connect(lambda: self.show_builds_signal.emit(variant))
         layout.addWidget(btn_builds)
         

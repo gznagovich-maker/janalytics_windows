@@ -4,7 +4,7 @@ from PySide6.QtCore import QThread, Signal
 import time
 
 from database.connection import SessionLocal
-from database.models import Team, PokemonBuild
+from database.models import MatchTeam, PokemonSet, TeamVariant
 from src.analytics.archetypes import analizza_archetipo_team
 
 def normalize_limitless_pokemon(name: str) -> str:
@@ -40,18 +40,26 @@ def normalize_replay_pokemon(sp: str) -> str:
     return sp
 
 def build_replay_core_dict(session):
-    all_builds = session.query(Team.id, PokemonBuild.species_id).join(PokemonBuild).all()
-    team_species = {}
-    for t_id, sp_id in all_builds:
-        if not sp_id: continue
-        if t_id not in team_species:
-            team_species[t_id] = set()
-        team_species[t_id].add(normalize_replay_pokemon(sp_id))
+    variants = session.query(TeamVariant).all()
+    sets = session.query(PokemonSet).all()
+    
+    set_species = {s.id: normalize_replay_pokemon(s.species_id) for s in sets if s.species_id}
+    
+    variant_species = {}
+    for v in variants:
+        v_sp = set()
+        for sid in v.pokemon_set_ids:
+            if sid in set_species:
+                v_sp.add(set_species[sid])
+        if len(v_sp) == 6:
+            variant_species[v.id] = frozenset(v_sp)
+            
+    match_teams = session.query(MatchTeam.id, MatchTeam.team_variant_id).all()
     
     replay_core_to_team_ids = {}
-    for t_id, sp_set in team_species.items():
-        if len(sp_set) == 6:
-            fs = frozenset(sp_set)
+    for t_id, v_id in match_teams:
+        if v_id in variant_species:
+            fs = variant_species[v_id]
             if fs not in replay_core_to_team_ids:
                 replay_core_to_team_ids[fs] = []
             replay_core_to_team_ids[fs].append(t_id)
@@ -193,8 +201,8 @@ class MultiTournamentWorker(QThread):
                     norm_team = frozenset([normalize_limitless_pokemon(x) for x in team_tuple])
                     archetype_str = "Sconosciuto (Nessun replay locale)"
                     if norm_team in replay_cores:
-                        arch_res = analizza_archetipo_team("Core", replay_cores[norm_team], session)
-                        archetype_str = arch_res.replace("Team Core : ", "")
+                        arch_res = analizza_archetipo_team(list(norm_team), replay_cores[norm_team], session)
+                        archetype_str = arch_res
                     team_list_with_arch.append((team_tuple, count, archetype_str))
                 
                 result = {
@@ -219,8 +227,8 @@ class MultiTournamentWorker(QThread):
                 norm_team = frozenset([normalize_limitless_pokemon(x) for x in team_tuple])
                 archetype_str = "Sconosciuto (Nessun replay locale)"
                 if norm_team in replay_cores:
-                    arch_res = analizza_archetipo_team("Core", replay_cores[norm_team], session)
-                    archetype_str = arch_res.replace("Team Core : ", "")
+                    arch_res = analizza_archetipo_team(list(norm_team), replay_cores[norm_team], session)
+                    archetype_str = arch_res
                 team_list_with_arch.append((team_tuple, count, archetype_str))
             session.close()
                 
@@ -329,8 +337,8 @@ class TournamentDetailWorker(QThread):
                 norm_team = frozenset([normalize_limitless_pokemon(x) for x in team_tuple])
                 archetype_str = "Sconosciuto (Nessun replay locale)"
                 if norm_team in replay_cores:
-                    arch_res = analizza_archetipo_team("Core", replay_cores[norm_team], session)
-                    archetype_str = arch_res.replace("Team Core : ", "")
+                    arch_res = analizza_archetipo_team(list(norm_team), replay_cores[norm_team], session)
+                    archetype_str = arch_res
                 team_list_with_arch.append((team_tuple, count, archetype_str))
             
             result = {

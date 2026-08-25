@@ -2,17 +2,38 @@ import json
 from collections import Counter, defaultdict
 from sqlalchemy import select
 from sqlalchemy.orm import joinedload
-from database.models import Team, Match, Turn, TurnAction
+from database.models import MatchTeam, Match, Turn, TurnAction, TeamVariant
 
-def analizza_archetipo_statico():
+def analizza_archetipo_statico(species_list: list[str]) -> list[str]:
     """
-    Funzione futura: deriverà l'archetipo da un'analisi statica della composizione 
-    del team (mosse, abilità, statistiche base note) prima dell'inizio del match.
-    (Lasciata vuota per implementazioni future come richiesto dal design).
+    Deriva l'archetipo da un'analisi statica della composizione (specie) del team.
+    Restituisce una lista di archetipi statici.
     """
-    pass
+    archetypes = []
+    species = set(s.lower() for s in species_list)
+    
+    if "torkoal" in species or "pelipper" in species or "politoed" in species or "ninetales" in species:
+        archetypes.append("Weather")
+    
+    if "farigiraf" in species or "indeedee" in species or "indeedeef" in species:
+        if "armarouge" in species or "ursalunabloodmoon" in species or "ursaluna" in species:
+            archetypes.append("Trick Room")
+            
+    if "tornadus" in species or "whimsicott" in species or "talonflame" in species or "murkrow" in species:
+        archetypes.append("Tailwind")
+        
+    if "dondozo" in species and "tatsugiri" in species:
+        archetypes.append("Dondozo")
+        
+    if "psyspam" in species or ("indeedee" in species and "armarouge" in species):
+        archetypes.append("Psyspam")
+        
+    if not archetypes:
+        archetypes.append("Balance")
+        
+    return archetypes
 
-def get_match_team_archetypes(team: Team) -> list[str]:
+def get_match_team_archetypes(team: MatchTeam, session) -> list[str]:
     match = team.match
     if not match or not match.turns:
         return []
@@ -21,15 +42,17 @@ def get_match_team_archetypes(team: Team) -> list[str]:
     if N == 0:
         return []
         
-    build_ids = {pb.id for pb in team.pokemon_builds}
+    variant = session.query(TeamVariant).filter_by(id=team.team_variant_id).first()
+    if not variant:
+        return []
+        
+    set_ids = set(variant.pokemon_set_ids)
     
     # Variabili metriche
     weather_setters_in_team = 0
     weather_name = ""
     team_weathers = set()
-    
     boost_stages = 0
-    
     team_set_trickroom = False
     team_set_tailwind = False
     
@@ -40,11 +63,6 @@ def get_match_team_archetypes(team: Team) -> list[str]:
             team_set_tailwind = True
             
         for action in turn.actions:
-            if action.action_type in ("switch", "drag"):
-                if action.actor_build_id in build_ids:
-                    pass # Non più usato per il balance, ma lo lasciamo in caso
-            
-            # Parsing dei tags
             if action.tags and isinstance(action.tags, dict):
                 # 1. METEO DINAMICO (Attribution)
                 if "weather" in action.tags:
@@ -53,8 +71,7 @@ def get_match_team_archetypes(team: Team) -> list[str]:
                         w_val = str(action.tags["weather"]).replace("'", "").replace("[", "").replace("]", "")
                         current_weather = w_val.split(",")[0].strip() if "," in w_val else w_val
                         
-                        # Verifica CHI ha settato il meteo
-                        if action.actor_build_id in build_ids:
+                        if action.actor_set_id in set_ids:
                             team_weathers.add(current_weather)
                         else:
                             if f"[of] {team.player_slot}" in tag_str_lower:
@@ -65,7 +82,6 @@ def get_match_team_archetypes(team: Team) -> list[str]:
                 # 2. SETUP SWEEP (Attribution)
                 if "boost" in action.tags:
                     for evt in action.tags["boost"]:
-                        # evt[0] contiene ad es. 'p1a: Garchomp'
                         if len(evt) >= 1 and evt[0].startswith(team.player_slot):
                             try:
                                 boost_stages += int(evt[2]) if len(evt) >= 3 else 1
@@ -77,22 +93,21 @@ def get_match_team_archetypes(team: Team) -> list[str]:
                         if len(evt) >= 1 and evt[0].startswith(team.player_slot):
                             boost_stages += 2
                             
-                # 3. TRICK ROOM e TAILWIND (Attribution da fieldstart/sideend)
+                # 3. TRICK ROOM e TAILWIND (Attribution)
                 if "fieldstart" in action.tags:
                     for evt in action.tags["fieldstart"]:
                         evt_str = str(evt).lower()
                         if "trick room" in evt_str:
-                            if action.actor_build_id in build_ids or f"[of] {team.player_slot}" in evt_str:
+                            if action.actor_set_id in set_ids or f"[of] {team.player_slot}" in evt_str:
                                 team_set_trickroom = True
                                 
                 if "sidestart" in action.tags:
                     for evt in action.tags["sidestart"]:
                         evt_str = str(evt).lower()
                         if "tailwind" in evt_str:
-                            if action.actor_build_id in build_ids or f"[of] {team.player_slot}" in evt_str or f"['{team.player_slot}" in evt_str:
+                            if action.actor_set_id in set_ids or f"[of] {team.player_slot}" in evt_str or f"['{team.player_slot}" in evt_str:
                                 team_set_tailwind = True
                 
-    # Gerarchia di classificazione rimossa per favorire archetipi frazionati simultanei
     assigned_match_archetypes = []
     
     if team_set_trickroom:
@@ -104,7 +119,6 @@ def get_match_team_archetypes(team: Team) -> list[str]:
     if team_set_tailwind:
         assigned_match_archetypes.append("Tailwind Offense")
     
-    # Balance se non ha attivato altri archetipi aggressivi e il match è durato tanto
     if not assigned_match_archetypes and N >= 8:
         assigned_match_archetypes.append("Balance")
         
@@ -113,63 +127,54 @@ def get_match_team_archetypes(team: Team) -> list[str]:
         
     return assigned_match_archetypes
 
-def analizza_archetipo_team(team_id: str, lista_match_ids: list[int], session) -> str:
+def analizza_archetipo_team(species_list: list[str], lista_match_ids: list[int], session) -> str:
     """
-    Analizza i replay di una squadra usando Event Sourcing Puro.
+    Analizza i replay di una squadra e la sua composizione, restituendo una 
+    stringa HTML con gli archetipi Statici in azzurro e Dinamici in giallo.
+    """
+    # 1. Calcolo Statico
+    static_archs = analizza_archetipo_statico(species_list)
+    static_str = ", ".join(static_archs)
     
-    team_id: Stringa identificativa della variante in analisi (es. "Variante 1").
-    lista_match_ids: Lista di interi corrispondenti agli ID dei Team nel database 
-                     (nella nostra architettura, ogni Team rappresenta la singola 
-                     apparizione di una squadra in un match).
-    """
+    # 2. Calcolo Dinamico
     archetipi_weights = defaultdict(float)
     valid_matches = 0
     
-    # Query ottimizzata SQLAlchemy 2.0 (Eager loading in bulk)
-    stmt = select(Team).options(
-        joinedload(Team.match).joinedload(Match.turns).joinedload(Turn.actions),
-        joinedload(Team.pokemon_builds)
-    ).filter(Team.id.in_(lista_match_ids))
+    stmt = select(MatchTeam).options(
+        joinedload(MatchTeam.match).joinedload(Match.turns).joinedload(Turn.actions)
+    ).filter(MatchTeam.id.in_(lista_match_ids))
     
     teams_db = session.scalars(stmt).unique().all()
     
     for team in teams_db:
-        assigned_match_archetypes = get_match_team_archetypes(team)
+        assigned_match_archetypes = get_match_team_archetypes(team, session)
         if not assigned_match_archetypes:
             continue
             
         valid_matches += 1
         
-        # Ponderazione: un team può giocare 50% setup e 50% rain nello stesso match
         weight = 1.0 / len(assigned_match_archetypes)
         for arch in assigned_match_archetypes:
             archetipi_weights[arch] += weight
             
-    # Formattazione Output Richiesta
-    if valid_matches == 0:
-        return f"Team {team_id} : Nessun Dato"
-        
     parts = []
-    
-    # Ordinamento decrescente per peso
-    sorted_archs = sorted(archetipi_weights.items(), key=lambda x: x[1], reverse=True)
-    for arch, weight in sorted_archs:
-        pct = round((weight / valid_matches) * 100)
-        if pct > 0:
-            arch_clean = arch.replace(" ", "")
-            parts.append(f"{arch_clean}:{pct}%")
+    if valid_matches > 0:
+        sorted_archs = sorted(archetipi_weights.items(), key=lambda x: x[1], reverse=True)
+        for arch, weight in sorted_archs:
+            pct = round((weight / valid_matches) * 100)
+            if pct > 0:
+                arch_clean = arch.replace(" ", "")
+                parts.append(f"{arch_clean}:{pct}%")
             
     if not parts:
         parts.append("Unclassified:100%")
         
-    return f"Team {team_id} : " + " ".join(parts)
-
+    dynamic_str = " ".join(parts)
+    
+    html = f"<span style='color: deepskyblue;'>{static_str}</span> <br> <span style='color: #FFD700;'>{dynamic_str}</span>"
+    return html
 
 def generate_unrecognized_actions_log(session) -> str:
-    """
-    Scansiona tutto il database per estrarre azioni (weather, setup, tailwind, trickroom) 
-    che non possono essere attribuite a P1 o P2.
-    """
     log_lines = []
     
     matches = session.query(Match).all()
@@ -179,33 +184,29 @@ def generate_unrecognized_actions_log(session) -> str:
                 if not a.tags or not isinstance(a.tags, dict):
                     continue
                 
-                # Check weather
                 if "weather" in a.tags:
                     tag_lower = str(a.tags["weather"]).lower()
                     if "[upkeep]" not in tag_lower and "none" not in tag_lower and "clearskies" not in tag_lower:
                         if not ("[of] p1" in tag_lower or "[of] p2" in tag_lower):
-                            if not a.actor_build_id:
+                            if not a.actor_set_id:
                                 log_lines.append(f"Match {m.id} | Turn {t.turn_number} | Unrecognized Weather: {a.tags['weather']} | Action Details: {a.details}")
                                 
-                # Check sidestart
                 if "sidestart" in a.tags:
                     for evt in a.tags["sidestart"]:
                         evt_lower = str(evt).lower()
                         if "tailwind" in evt_lower:
                             if not (evt_lower.startswith("p1") or evt_lower.startswith("p2") or evt_lower.startswith("['p1") or evt_lower.startswith("['p2")):
-                                if not a.actor_build_id:
+                                if not a.actor_set_id:
                                     log_lines.append(f"Match {m.id} | Turn {t.turn_number} | Unrecognized Tailwind: {evt} | Action Details: {a.details}")
                                     
-                # Check fieldstart (Trick Room)
                 if "fieldstart" in a.tags:
                     for evt in a.tags["fieldstart"]:
                         evt_lower = str(evt).lower()
                         if "trick room" in evt_lower:
                             if not ("[of] p1" in evt_lower or "[of] p2" in evt_lower):
-                                if not a.actor_build_id:
+                                if not a.actor_set_id:
                                     log_lines.append(f"Match {m.id} | Turn {t.turn_number} | Unrecognized Trick Room: {evt} | Action Details: {a.details}")
                                     
-                # Check boost
                 if "boost" in a.tags:
                     for evt in a.tags["boost"]:
                         evt_lower = str(evt).lower()
@@ -216,4 +217,3 @@ def generate_unrecognized_actions_log(session) -> str:
         return "Nessuna azione non riconosciuta trovata."
         
     return "LOG AZIONI NON RICONOSCIUTE\n" + "="*40 + "\n" + "\n".join(log_lines)
-

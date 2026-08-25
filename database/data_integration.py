@@ -99,6 +99,20 @@ class PokeDataIntegrator:
                         
         return result
 
+    def get_showdown_move_details(self, move_name: str) -> Dict[str, Any]:
+        """Loads moves.json and returns the details for a given normalized move name."""
+        if not hasattr(self, '_moves_json'):
+            try:
+                moves_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "moves.json")
+                with open(moves_path, "r", encoding="utf-8") as f:
+                    self._moves_json = json.load(f)
+            except Exception as e:
+                print(f"Error loading moves.json: {e}")
+                self._moves_json = {}
+                
+        norm_name = self.normalize_to_showdown(move_name)
+        return self._moves_json.get(norm_name, {})
+
     def get_move(self, identifier: str) -> Dict[str, Any]:
         sd_id = self.normalize_to_showdown(identifier)
         db_move = self.session.query(Move).filter(Move.id == sd_id).first()

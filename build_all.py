@@ -14,16 +14,36 @@ def main():
     # Assicuriamoci di essere nella directory root
     base_dir = os.path.dirname(os.path.abspath(__file__))
     os.chdir(base_dir)
+    
+    db_file = "vgc_replays.db"
+    db_backup = "vgc_replays_backup.db"
 
     print("=" * 50)
+    print(" 0. Preparazione di un Database pulito per l'Installer")
+    print("=" * 50)
+    if os.path.exists(db_file):
+        print(f"Eseguo il backup di {db_file} in {db_backup}...")
+        shutil.move(db_file, db_backup)
+        
+    print("Esecuzione di install.py per generare un DB nuovo con i metadata (Abilità, Mosse, ecc.)...")
+    python_exec = sys.executable
+    if os.path.exists(os.path.join("venv", "Scripts", "python.exe")):
+        python_exec = os.path.join("venv", "Scripts", "python.exe")
+    run_command([python_exec, "install.py"])
+
+    print("\n" + "=" * 50)
     print(" 1. Compilazione dell'applicazione principale")
     print("=" * 50)
     
     # Specifica l'icona per l'app principale
     icon_path = os.path.join("assets", "logo", "icon.ico")
     
+    pyinstaller_exec = os.path.join("venv", "Scripts", "pyinstaller")
+    if not os.path.exists(pyinstaller_exec + ".exe"):
+        pyinstaller_exec = "pyinstaller"
+
     main_build_cmd = [
-        "venv\\Scripts\\pyinstaller",
+        pyinstaller_exec,
         "--noconfirm",
         "--onefile",
         "--windowed", # Non mostrare la console in background
@@ -39,7 +59,6 @@ def main():
     print("=" * 50)
     
     app_exe = os.path.join("dist", "Janalytics.exe")
-    db_file = "vgc_replays.db"
     
     if not os.path.exists(app_exe):
         print("Errore: Janalytics.exe non trovato in dist/")
@@ -47,14 +66,16 @@ def main():
         
     if not os.path.exists(db_file):
         print(f"Attenzione: {db_file} non trovato. L'installer non includerà il DB precompilato.")
-        db_file = None
+        db_to_pack = None
+    else:
+        db_to_pack = db_file
 
     print("\n" + "=" * 50)
     print(" 3. Compilazione dell'installer")
     print("=" * 50)
 
     installer_build_cmd = [
-        "venv\\Scripts\\pyinstaller",
+        pyinstaller_exec,
         "--noconfirm",
         "--onefile",
         "--console", # L'installer è un'app console
@@ -63,12 +84,21 @@ def main():
         "--add-data", f"{app_exe}{os.pathsep}.",
     ]
     
-    if db_file:
-        installer_build_cmd.extend(["--add-data", f"{db_file}{os.pathsep}."])
+    if db_to_pack:
+        installer_build_cmd.extend(["--add-data", f"{db_to_pack}{os.pathsep}."])
         
     installer_build_cmd.append("installer.py")
     
     run_command(installer_build_cmd)
+    
+    print("\n" + "=" * 50)
+    print(" 4. Ripristino del Database originale")
+    print("=" * 50)
+    if os.path.exists(db_file):
+        os.remove(db_file)
+    if os.path.exists(db_backup):
+        print(f"Ripristino di {db_backup} in {db_file}...")
+        shutil.move(db_backup, db_file)
 
     print("\n" + "=" * 50)
     print(" COMPILAZIONE COMPLETATA!")

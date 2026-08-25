@@ -100,6 +100,7 @@ def get_pokemon_icon_path(species_name):
 class ReplayAnalyzerUI(QWidget):
     back_requested = Signal()
     link_clicked = Signal(str)
+    title_changed = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -117,24 +118,22 @@ class ReplayAnalyzerUI(QWidget):
 
         # Top bar
         top = QHBoxLayout()
-        self.lbl_nome_battaglia = QLabel("Nessun match selezionato")
-        self.lbl_nome_battaglia.setStyleSheet("font-size: 18px; font-weight: bold; color: #B6FAF5;")
         self.btn_back = QPushButton("🔙 Indietro")
         self.btn_back.clicked.connect(self.back_requested.emit)
-        top.addWidget(self.lbl_nome_battaglia, 1)
         top.addWidget(self.btn_back)
+        top.addStretch()
         self.main_layout.addLayout(top)
 
         # Middle (team panels)
         mid = QHBoxLayout()
         self.p1_area_layout = QVBoxLayout()
         self.lbl_p1_info = QLabel("Giocatore 1")
-        self.lbl_p1_info.setStyleSheet("font-weight: bold; color: #467A77;")
+        self.lbl_p1_info.setStyleSheet("font-size: 16px; font-weight: bold; color: #B8A9B7;")
         self.p1_area_layout.addWidget(self.lbl_p1_info)
         p1_frames = QHBoxLayout()
         self.frame_img_p1 = QLabel()
         self.frame_img_p1.setAlignment(Qt.AlignCenter)
-        self.frame_img_p1.setStyleSheet("background:#0A0A0A; border:1px solid #333; border-radius:4px;")
+        self.frame_img_p1.setStyleSheet("background:transparent; border:none;")
         self.frame_img_p1.setFixedSize(100, 100)
         self.frame_dati_p1 = QFrame()
         self.frame_dati_p1.setFrameShape(QFrame.StyledPanel)
@@ -151,7 +150,7 @@ class ReplayAnalyzerUI(QWidget):
 
         self.p2_area_layout = QVBoxLayout()
         self.lbl_p2_info = QLabel("Giocatore 2")
-        self.lbl_p2_info.setStyleSheet("font-weight: bold; color: #B6FAF5;")
+        self.lbl_p2_info.setStyleSheet("font-size: 16px; font-weight: bold; color: #C2BFBC;")
         self.p2_area_layout.addWidget(self.lbl_p2_info)
         p2_frames = QHBoxLayout()
         self.frame_dati_p2 = QFrame()
@@ -162,7 +161,7 @@ class ReplayAnalyzerUI(QWidget):
         QVBoxLayout(self.frame_dati_p2).addWidget(self.lbl_dati_p2)
         self.frame_img_p2 = QLabel()
         self.frame_img_p2.setAlignment(Qt.AlignCenter)
-        self.frame_img_p2.setStyleSheet("background:#0A0A0A; border:1px solid #333; border-radius:4px;")
+        self.frame_img_p2.setStyleSheet("background:transparent; border:none;")
         self.frame_img_p2.setFixedSize(100, 100)
         p2_frames.addWidget(self.frame_dati_p2)
         p2_frames.addWidget(self.frame_img_p2)
@@ -205,17 +204,17 @@ class ReplayAnalyzerUI(QWidget):
         self.frame_pokemon_in_campo = QFrame()
         self.frame_pokemon_in_campo.setFrameShape(QFrame.StyledPanel)
         self.frame_pokemon_in_campo.setStyleSheet(
-            "background:#141414; border:1px solid #333; border-radius:8px;")
+            "background:#211924; border:none; border-radius:12px; padding: 8px;")
         self.pokemon_grid = QGridLayout(self.frame_pokemon_in_campo)
-        self.pokemon_grid.setSpacing(6)
+        self.pokemon_grid.setSpacing(12)
         self.lbl_p1a = QLabel("P1a<br><i>(Vuoto)</i>")
         self.lbl_p1b = QLabel("P1b<br><i>(Vuoto)</i>")
         self.lbl_p2a = QLabel("P2a<br><i>(Vuoto)</i>")
         self.lbl_p2b = QLabel("P2b<br><i>(Vuoto)</i>")
-        p1_style = ("background:rgba(70,122,119,0.1);color:#467A77;"
-                    "border:1px solid #467A77;border-radius:6px;padding:8px;")
-        p2_style = ("background:rgba(182,250,245,0.1);color:#B6FAF5;"
-                    "border:1px solid #B6FAF5;border-radius:6px;padding:8px;")
+        p1_style = ("background:rgba(182,250,245,0.1);color:#B8A9B7;"
+                    "border:none;border-radius:8px;padding:12px;")
+        p2_style = ("background:rgba(250,183,240,0.1);color:#C2BFBC;"
+                    "border:none;border-radius:8px;padding:12px;")
         for lbl in (self.lbl_p1a, self.lbl_p1b):
             lbl.setAlignment(Qt.AlignCenter)
             lbl.setStyleSheet(p1_style)
@@ -284,7 +283,7 @@ class ReplayAnalyzerUI(QWidget):
             "<i>Esempio</i>: Un valore positivo indica che il Giocatore 1 ha il controllo tattico della scacchiera."
         )
         lbl_spiegazione.setWordWrap(True)
-        lbl_spiegazione.setStyleSheet("background-color: #1a1a1a; padding: 10px; border-radius: 5px;")
+        lbl_spiegazione.setStyleSheet("background-color: transparent; border: none; padding: 0px;")
         tab_grafici_lay.addWidget(lbl_spiegazione)
 
         self.figure = Figure(figsize=(8, 4), facecolor='#121212')
@@ -314,7 +313,7 @@ class ReplayAnalyzerUI(QWidget):
         if not self.match_data:
             return
         fmt = self.match_data.get("format", "Regolamento Sconosciuto")
-        self.lbl_nome_battaglia.setText(f"Match: {match_id} | {fmt}")
+        self.title_changed.emit(f"Match: {match_id} | {fmt}")
         # Reset BEFORE populating so auto-select in populate_turns is not wiped
         self._reset_panels()
         self.populate_teams(self.match_data)
@@ -332,7 +331,7 @@ class ReplayAnalyzerUI(QWidget):
         ax1.tick_params(colors='white')
         for spine in ax1.spines.values(): spine.set_color('#333333')
         
-        ax1.plot(series["turns"], series["delta_hp"], marker='o', color='#B6FAF5', label='ΔHP Ponderato')
+        ax1.plot(series["turns"], series["delta_hp"], marker='o', color='#B8A9B7', label='ΔHP Ponderato')
         ax1.set_title("Snapshot di Stato (Vantaggio HP P1)", color='white')
         ax1.axhline(0, color='gray', linestyle='--')
         ax1.legend(loc='best', facecolor='#121212', edgecolor='#333333', labelcolor='white')
@@ -342,7 +341,7 @@ class ReplayAnalyzerUI(QWidget):
         ax2.tick_params(colors='white')
         for spine in ax2.spines.values(): spine.set_color('#333333')
         
-        ax2.bar(series["turns"], series["momentum"], color=['#467A77' if m > 0 else '#8c3b3b' for m in series["momentum"]])
+        ax2.bar(series["turns"], series["momentum"], color=['#8A7D89' if m > 0 else '#8c3b3b' for m in series["momentum"]])
         ax2.set_title("Indice di Vantaggio (Momentum P1)", color='white')
         ax2.axhline(0, color='gray', linestyle='--')
         
@@ -778,7 +777,7 @@ class ReplayAnalyzerUI(QWidget):
         if sim.get("p2_auroraveil"):  self.list_condizioni_p2.addItem("🌈 Aurora Veil")
 
         self.frame_pokemon_in_campo.setStyleSheet(
-            f"background:{board_bg}; border:1px solid #333; border-radius:8px;")
+            f"background:{board_bg}; border:none; border-radius:12px; padding: 8px;")
 
         # ── 3. Action attributes ──────────────────────────────────────────────
         act_type   = action_data.get("type", "")
@@ -788,22 +787,22 @@ class ReplayAnalyzerUI(QWidget):
 
         detail_link = details
         if act_type == "move":
-            detail_link = (f'<a href="move:{details}" style="color:#467A77;">'
+            detail_link = (f'<a href="move:{details}" style="color:#8A7D89;">'
                            f'{details}</a>')
         elif act_type == "ability":
-            detail_link = (f'<a href="ability:{details}" style="color:#B6FAF5;">'
+            detail_link = (f'<a href="ability:{details}" style="color:#B8A9B7;">'
                            f'{details}</a>')
         elif act_type == "item":
-            detail_link = (f'<a href="item:{details}" style="color:#FAB7F0;">'
+            detail_link = (f'<a href="item:{details}" style="color:#C2BFBC;">'
                            f'{details}</a>')
 
         icon = ACTION_ICONS.get(act_type, "▪️")
         self.txt_attr.setHtml(
             f'<h3 style="margin:0 0 4px 0;color:#FFFFFF;">{icon} {act_type.upper()}</h3>'
             f'<b style="color:#AAAAAA;">Attore:</b> '
-            f'<span style="color:#FAB7F0;">{actor}</span><br>'
+            f'<span style="color:#C2BFBC;">{actor}</span><br>'
             f'<b style="color:#AAAAAA;">Bersaglio:</b> '
-            f'<span style="color:#B6FAF5;">{target_str}</span><br>'
+            f'<span style="color:#B8A9B7;">{target_str}</span><br>'
             f'<b style="color:#AAAAAA;">Dettagli:</b> {detail_link}'
         )
 

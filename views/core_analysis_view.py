@@ -2,9 +2,9 @@ import os
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QLabel, QPushButton, QProgressBar,
     QTableWidget, QTableWidgetItem, QHeaderView, QSplitter, QTreeWidget, QTreeWidgetItem,
-    QMessageBox, QFrame, QDialog, QDialogButtonBox
+    QMessageBox, QFrame, QDialog, QDialogButtonBox, QGraphicsDropShadowEffect
 )
-from PySide6.QtGui import QPixmap, QIcon
+from PySide6.QtGui import QPixmap, QIcon, QColor
 from PySide6.QtCore import Qt, QThread, Signal
 
 from database.connection import SessionLocal
@@ -69,7 +69,7 @@ class CoreMatchupDialog(QDialog):
         layout.setSpacing(15)
         
         # Titolo
-        title = QLabel(f"<h2 style='color: #FAB7F0;'>{' + '.join([p.capitalize() for p in core.pokemon])}</h2>")
+        title = QLabel(f"<h2 style='color: #C2BFBC;'>{' + '.join([p.capitalize() for p in core.pokemon])}</h2>")
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
         
@@ -186,19 +186,22 @@ class GlobalMetaWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(20, 20, 20, 20)
         
-        # Controls Header (1.2 times taller than navbar's 70px = 84px)
+        # Controls Header
         self.header_widget = QFrame()
         self.header_widget.setObjectName("header_widget")
-        self.header_widget.setFixedHeight(84)
-        self.header_widget.setStyleSheet("#header_widget { background-color: #2b2b2b; border-radius: 8px; }")
+        self.header_widget.setFixedHeight(64)
+        self.header_widget.setStyleSheet("#header_widget { background-color: #342A38; border-radius: 8px; }")
+        
+        shadow = QGraphicsDropShadowEffect()
+        shadow.setBlurRadius(15)
+        shadow.setColor(QColor(0, 0, 0, 120))
+        shadow.setOffset(0, 4)
+        self.header_widget.setGraphicsEffect(shadow)
         
         controls = QHBoxLayout(self.header_widget)
         controls.setContentsMargins(15, 10, 15, 10)
-        
-        title_lbl = QLabel("<b>ANALISI CORE</b>")
-        title_lbl.setStyleSheet("font-size: 18px; color: #ffffff;")
-        controls.addWidget(title_lbl)
         
         controls.addSpacing(30)
         

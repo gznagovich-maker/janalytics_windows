@@ -1,4 +1,4 @@
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from sqlalchemy import ForeignKey, String, Integer, Float, Boolean, DateTime, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from database.connection import Base
@@ -51,32 +51,10 @@ class Move(Base):
     short_desc: Mapped[str] = mapped_column(String)
 
 
-class Match(Base):
-    __tablename__ = "match"
-    id: Mapped[str] = mapped_column(String, primary_key=True)
-    format: Mapped[Optional[str]] = mapped_column(String)
-    timestamp: Mapped[Optional[DateTime]] = mapped_column(DateTime)
-    winner_id: Mapped[Optional[str]] = mapped_column(ForeignKey("trainer.id"))
-
-    teams = relationship("Team", back_populates="match", cascade="all, delete-orphan")
-    turns = relationship("Turn", back_populates="match", cascade="all, delete-orphan")
-
-
-class Team(Base):
-    __tablename__ = "team"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    match_id: Mapped[str] = mapped_column(ForeignKey("match.id"))
-    trainer_id: Mapped[str] = mapped_column(ForeignKey("trainer.id"))
-    player_slot: Mapped[str] = mapped_column(String)
-
-    match = relationship("Match", back_populates="teams")
-    pokemon_builds = relationship("PokemonBuild", back_populates="team", cascade="all, delete-orphan")
-
-
-class PokemonBuild(Base):
-    __tablename__ = "pokemon_build"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    team_id: Mapped[int] = mapped_column(ForeignKey("team.id"))
+class PokemonSet(Base):
+    """Hash univoco di una build di un pokemon. Elimina la ridondanza."""
+    __tablename__ = "pokemon_set"
+    id: Mapped[str] = mapped_column(String, primary_key=True)  # Hash univoco
     species_id: Mapped[str] = mapped_column(ForeignKey("pokemon_species.id"))
     ability_id: Mapped[Optional[str]] = mapped_column(ForeignKey("ability.id"))
     item_id: Mapped[Optional[str]] = mapped_column(ForeignKey("item.id"))
@@ -98,12 +76,59 @@ class PokemonBuild(Base):
     iv_spe: Mapped[int] = mapped_column(Integer, default=31)
 
     nature: Mapped[str] = mapped_column(String, default="Hardy")
-    is_brought: Mapped[bool] = mapped_column(Boolean, default=False)
-
-    team = relationship("Team", back_populates="pokemon_builds")
+    
     species = relationship("PokemonSpecies")
     ability = relationship("Ability")
     item = relationship("Item")
+
+
+class TeamVariant(Base):
+    """Hash univoco di un team completo (6 PokemonSet)."""
+    __tablename__ = "team_variant"
+    id: Mapped[str] = mapped_column(String, primary_key=True)  # Hash univoco dei 6 set
+    # Salviamo i riferimenti in JSON o CSV per evitare 6 colonne fisse o tabelle di junction per query analitiche
+    pokemon_set_ids: Mapped[Any] = mapped_column(JSON) # Lista di stringhe ID
+
+
+class Match(Base):
+    __tablename__ = "match"
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    format: Mapped[Optional[str]] = mapped_column(String)
+    timestamp: Mapped[Optional[DateTime]] = mapped_column(DateTime)
+    winner_id: Mapped[Optional[str]] = mapped_column(ForeignKey("trainer.id"))
+
+    teams = relationship("MatchTeam", back_populates="match", cascade="all, delete-orphan")
+    turns = relationship("Turn", back_populates="match", cascade="all, delete-orphan")
+    summary = relationship("MatchSummary", back_populates="match", uselist=False, cascade="all, delete-orphan")
+
+
+class MatchTeam(Base):
+    __tablename__ = "match_team"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    match_id: Mapped[str] = mapped_column(ForeignKey("match.id"))
+    trainer_id: Mapped[str] = mapped_column(ForeignKey("trainer.id"))
+    player_slot: Mapped[str] = mapped_column(String)
+    team_variant_id: Mapped[str] = mapped_column(ForeignKey("team_variant.id"))
+
+    match = relationship("Match", back_populates="teams")
+    variant = relationship("TeamVariant")
+
+
+class MatchSummary(Base):
+    """Statistiche pre-calcolate del match per query analitiche veloci."""
+    __tablename__ = "match_summary"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    match_id: Mapped[str] = mapped_column(ForeignKey("match.id"))
+    
+    p1_brought_pokemon: Mapped[Any] = mapped_column(JSON, default=list) # Lista di species_id portati
+    p2_brought_pokemon: Mapped[Any] = mapped_column(JSON, default=list) 
+    
+    p1_archetypes: Mapped[Any] = mapped_column(JSON, default=list)
+    p2_archetypes: Mapped[Any] = mapped_column(JSON, default=list)
+    
+    total_turns: Mapped[int] = mapped_column(Integer, default=0)
+    
+    match = relationship("Match", back_populates="summary")
 
 
 class Turn(Base):
@@ -135,13 +160,13 @@ class TurnAction(Base):
     action_type: Mapped[str] = mapped_column(String)
     move_id: Mapped[Optional[str]] = mapped_column(ForeignKey("move.id"))
 
-    actor_build_id: Mapped[Optional[int]] = mapped_column(ForeignKey("pokemon_build.id"))
-    target_build_id: Mapped[Optional[int]] = mapped_column(ForeignKey("pokemon_build.id"))
+    actor_set_id: Mapped[Optional[str]] = mapped_column(ForeignKey("pokemon_set.id"))
+    target_set_id: Mapped[Optional[str]] = mapped_column(ForeignKey("pokemon_set.id"))
 
-    active_p1a_id: Mapped[Optional[int]] = mapped_column(ForeignKey("pokemon_build.id"))
-    active_p1b_id: Mapped[Optional[int]] = mapped_column(ForeignKey("pokemon_build.id"))
-    active_p2a_id: Mapped[Optional[int]] = mapped_column(ForeignKey("pokemon_build.id"))
-    active_p2b_id: Mapped[Optional[int]] = mapped_column(ForeignKey("pokemon_build.id"))
+    active_p1a_id: Mapped[Optional[str]] = mapped_column(ForeignKey("pokemon_set.id"))
+    active_p1b_id: Mapped[Optional[str]] = mapped_column(ForeignKey("pokemon_set.id"))
+    active_p2a_id: Mapped[Optional[str]] = mapped_column(ForeignKey("pokemon_set.id"))
+    active_p2b_id: Mapped[Optional[str]] = mapped_column(ForeignKey("pokemon_set.id"))
 
     ability_activated: Mapped[Optional[str]] = mapped_column(String)
     item_consumed: Mapped[Optional[str]] = mapped_column(String)
@@ -157,7 +182,7 @@ class ActionEffect(Base):
     __tablename__ = "action_effect"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     turn_action_id: Mapped[int] = mapped_column(ForeignKey("turn_action.id"))
-    target_build_id: Mapped[Optional[int]] = mapped_column(ForeignKey("pokemon_build.id"))
+    target_set_id: Mapped[Optional[str]] = mapped_column(ForeignKey("pokemon_set.id"))
     
     damage_percent: Mapped[float] = mapped_column(Float, default=0.0)
     stat_changes: Mapped[Dict[str, int]] = mapped_column(JSON, default=dict)
@@ -169,3 +194,6 @@ class ActionEffect(Base):
     is_protected: Mapped[bool] = mapped_column(Boolean, default=False)
     
     turn_action = relationship("TurnAction", back_populates="effects")
+
+PokemonBuild = PokemonSet
+Team = MatchTeam

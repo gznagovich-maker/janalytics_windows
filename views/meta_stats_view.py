@@ -2,7 +2,7 @@ import math
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QLabel, QPushButton, QMessageBox, QToolTip,
     QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView, QCompleter, QSlider, QSpinBox,
-    QListWidget, QListWidgetItem, QGridLayout, QCheckBox
+    QListWidget, QListWidgetItem, QGridLayout, QCheckBox, QScrollArea, QFrame
 )
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QColor, QPainter, QPixmap
@@ -12,7 +12,7 @@ from PySide6.QtCharts import (
 )
 
 from database.connection import SessionLocal
-from database.models import Match, Team, PokemonBuild, PokemonSpecies, Item
+from database.models import Match, MatchTeam, PokemonSet, PokemonSpecies, Item, TeamVariant
 
 
 class MetaStatsWidget(QWidget):
@@ -20,6 +20,7 @@ class MetaStatsWidget(QWidget):
         super().__init__(parent)
         
         self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(20, 20, 20, 20)
         
         # State tracking
         self.selected_pokemon = None
@@ -28,12 +29,12 @@ class MetaStatsWidget(QWidget):
         self.selected_move = None
         
         self.stat_colors = {
-            "hp": "#2ecc71",   # Green
-            "atk": "#e74c3c",  # Red
-            "def": "#f39c12",  # Orange
-            "spa": "#3498db",  # Blue
-            "spd": "#9b59b6",  # Purple
-            "spe": "#ff9ff3"   # Pink
+            "hp":  "#3D7A5A",   # Verde muted — salute
+            "atk": "#8A3838",   # Rosso desaturato — attacco
+            "def": "#607080",   # Grigio acciaio — difesa
+            "spa": "#5A5075",   # Lavanda scura — attacco speciale
+            "spd": "#8577A8",   # Lavanda primario — difesa speciale
+            "spe": "#C49A3C"    # Bronzo/oro — velocità (accento primario)
         }
         
         # Header Controls
@@ -81,8 +82,15 @@ class MetaStatsWidget(QWidget):
         self.chart_layout.addLayout(stats_controls)
         
         self.chart = QChart()
-        self.chart.setTitle("Statistiche Meta dei Pokémon (Livello 50)")
-        self.chart.setAnimationOptions(QChart.SeriesAnimations)
+        self.chart.setTheme(QChart.ChartTheme.ChartThemeDark)
+        self.chart.setBackgroundBrush(QColor("#000000"))
+        self.chart.setBackgroundPen(QColor(Qt.GlobalColor.transparent))
+        self.chart.setTitle("")
+        self.chart.setAnimationOptions(QChart.AnimationOption.SeriesAnimations)
+        self.chart.setMargins(QChart.Margins(0, 0, 0, 0) if hasattr(QChart, 'Margins') else self.chart.margins())
+        self.chart.legend().setVisible(True)
+        self.chart.legend().setLabelColor(QColor("#5E6575"))
+        self.chart.legend().setAlignment(Qt.AlignBottom)
         
         self.chart_view = QChartView(self.chart)
         self.chart_view.setRenderHint(QPainter.Antialiasing)
@@ -94,12 +102,15 @@ class MetaStatsWidget(QWidget):
         # Right side: Tabs (Simulatore / Filtri & Roster)
         self.right_tabs = QTabWidget()
         
-        # Tab Simulatore
+        # Tab Simulatore — avvolto in QScrollArea per renderlo completamente scrollabile
+        # (i widget [sprite 120px + combo + 6 righe stat + bottone] superano l'altezza del panel)
         self.calc_container = QWidget()
         self.calc_layout = QVBoxLayout(self.calc_container)
+        self.calc_layout.setContentsMargins(12, 12, 12, 16)
+        self.calc_layout.setSpacing(8)
         
         calc_title = QLabel("Simulatore Soglia (Liv. 50)")
-        calc_title.setStyleSheet("font-weight: bold; font-size: 16px; margin-bottom: 10px;")
+        calc_title.setStyleSheet("font-weight: 700; font-size: 15px; color: #B6FAF5; margin-bottom: 4px;")
         self.calc_layout.addWidget(calc_title)
         
         # Network Manager for downloading sprites
@@ -138,7 +149,10 @@ class MetaStatsWidget(QWidget):
         self.calc_layout.addWidget(self.calc_nature_combo)
         
         self.ev_remaining_label = QLabel("EVs Rimasti: 508 / 508")
-        self.ev_remaining_label.setStyleSheet("font-weight: bold; font-size: 14px; color: #3498db; margin-top: 5px; margin-bottom: 5px;")
+        self.ev_remaining_label.setStyleSheet(
+            "font-weight: 700; font-size: 14px; color: #B6FAF5;"
+            "margin-top: 6px; margin-bottom: 2px;"
+        )
         self.calc_layout.addWidget(self.ev_remaining_label)
         
         self.stats_grid = QGridLayout()
@@ -214,14 +228,23 @@ class MetaStatsWidget(QWidget):
             }
             row_idx += 1
             
-        self.btn_champions_mode = QPushButton("Modalità Champions")
+        self.btn_champions_mode = QPushButton("\u2605  Modalit\u00e0 Champions")
         self.btn_champions_mode.setCheckable(True)
-        self.btn_champions_mode.setStyleSheet("background-color: #333333; color: white; font-weight: bold; padding: 5px; margin-top: 10px;")
+        self.btn_champions_mode.setProperty("class", "primary")
+        self.btn_champions_mode.setMinimumHeight(40)
         self.btn_champions_mode.clicked.connect(self.set_champions_mode)
         self.calc_layout.addWidget(self.btn_champions_mode)
         
         self.calc_layout.addStretch()
-        self.right_tabs.addTab(self.calc_container, "Simulatore")
+
+        # QScrollArea — il contenuto del simulatore è più alto del panel disponibile
+        # senza di essa il bottone Champions è irraggiungibile (Nielsen #1)
+        self.calc_scroll = QScrollArea()
+        self.calc_scroll.setWidget(self.calc_container)
+        self.calc_scroll.setWidgetResizable(True)
+        self.calc_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.calc_scroll.setFrameShape(QFrame.NoFrame)
+        self.right_tabs.addTab(self.calc_scroll, "Simulatore")
         
         # Tab Filtri & Roster
         self.roster_container = QWidget()
@@ -232,7 +255,7 @@ class MetaStatsWidget(QWidget):
         self.roster_layout.addWidget(roster_title)
         
         self.btn_elimina_sotto = QPushButton("Elimina Pokémon Sotto Soglia")
-        self.btn_elimina_sotto.setStyleSheet("background-color: #e74c3c; color: white; font-weight: bold; padding: 5px;")
+        self.btn_elimina_sotto.setProperty("class", "danger")
         self.btn_elimina_sotto.clicked.connect(self.elimina_sotto_soglia)
         self.roster_layout.addWidget(self.btn_elimina_sotto)
         
@@ -408,17 +431,37 @@ class MetaStatsWidget(QWidget):
             
         session = SessionLocal()
         try:
-            builds = session.query(
-                PokemonSpecies.name,
-                Team.trainer_id,
-                Match.winner_id,
-                PokemonBuild.nature,
-                PokemonBuild.item_id,
-                PokemonBuild.moves
-            ).join(PokemonBuild.team)\
-             .join(Team.match)\
-             .join(PokemonSpecies, PokemonBuild.species_id == PokemonSpecies.id)\
-             .filter(Match.format == fmt).all()
+            match_teams = session.query(MatchTeam, Match, TeamVariant)\
+                .join(Match, MatchTeam.match_id == Match.id)\
+                .join(TeamVariant, MatchTeam.team_variant_id == TeamVariant.id)\
+                .filter(Match.format == fmt).all()
+                
+            all_sets = session.query(PokemonSet).all()
+            set_dict = {s.id: s for s in all_sets}
+            
+            all_species = session.query(PokemonSpecies).all()
+            species_dict = {sp.id: sp.name for sp in all_species}
+            
+            builds = []
+            species_ids = set()
+            
+            for mt, m, tv in match_teams:
+                if not tv.pokemon_set_ids: continue
+                for set_id in tv.pokemon_set_ids:
+                    if set_id in set_dict:
+                        pset = set_dict[set_id]
+                        sp_name = species_dict.get(pset.species_id, "Sconosciuto")
+                        if pset.species_id:
+                            species_ids.add(pset.species_id)
+                        builds.append((
+                            sp_name,
+                            mt.trainer_id,
+                            m.winner_id,
+                            pset.nature,
+                            pset.item_id,
+                            pset.moves
+                        ))
+                        
             self.current_format_builds = builds
             
             self.builds_usage = {}
@@ -432,12 +475,6 @@ class MetaStatsWidget(QWidget):
             self.filter_usage.setValue(0)
             self.usage_label_value.setText("≥ 0")
             self.filter_usage.blockSignals(False)
-            
-            # Popola Roster
-            species_ids = set([s[0] for s in session.query(PokemonBuild.species_id)\
-                .join(Team, PokemonBuild.team_id == Team.id)\
-                .join(Match, Team.match_id == Match.id)\
-                .filter(Match.format == fmt).all() if s[0]])
             
             species_list = session.query(PokemonSpecies).filter(PokemonSpecies.id.in_(species_ids)).order_by(PokemonSpecies.name).all()
             
@@ -839,13 +876,13 @@ class MetaStatsWidget(QWidget):
             set_transparent.setBorderColor(QColor(0, 0, 0, 0))
             
             set_blue = QBarSet("Minima -> Neutra (0 EVs)")
-            set_blue.setColor(QColor("#3498db")) 
+            set_blue.setColor(QColor("#B8A9B7")) 
             
             set_green = QBarSet("Neutra (0 EVs) -> Neutra (Max EVs)")
-            set_green.setColor(QColor("#2ecc71")) 
+            set_green.setColor(QColor("#8A7D89")) 
             
             set_yellow = QBarSet("Neutra (Max EVs) -> Favorevole (Max EVs)")
-            set_yellow.setColor(QColor("#f1c40f")) 
+            set_yellow.setColor(QColor("#C2BFBC")) 
             
             species_list.sort(key=lambda x: x.base_stats.get(stat_key, 0))
             
@@ -917,12 +954,14 @@ class MetaStatsWidget(QWidget):
             if len(categories) > 15:
                 axisX.setLabelsAngle(-90)
             
-            self.chart.addAxis(axisX, Qt.AlignBottom)
+            axisX.setGridLineColor(QColor(Qt.GlobalColor.transparent))
+            self.chart.addAxis(axisX, Qt.AlignmentFlag.AlignBottom)
             series.attachAxis(axisX)
             
             axisY = QValueAxis()
             axisY.setRange(0, max_y_value * 1.1)
-            self.chart.addAxis(axisY, Qt.AlignLeft)
+            axisY.setGridLineColor(QColor("#463B4B"))
+            self.chart.addAxis(axisY, Qt.AlignmentFlag.AlignLeft)
             series.attachAxis(axisY)
             
             for marker in self.chart.legend().markers():

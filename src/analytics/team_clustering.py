@@ -2,30 +2,45 @@ import json
 from typing import List, Dict, Any, Set
 from sqlalchemy.orm import joinedload
 from database.connection import SessionLocal
-from database.models import Match, Team, PokemonBuild, Turn, TurnAction
-
-SETUP_MOVES = {
-    "swordsdance", "nastyplot", "dragondance", "quiverdance", 
-    "calmmind", "bulkup", "coil", "irondefense", "amnesia", 
-    "shiftgear", "tailglow"
-}
+from database.models import Match, MatchTeam, TeamVariant, PokemonSet, Turn, TurnAction
 
 def get_team_archetypes_and_groupings(max_distance: int = 2, format_filter: str = "Tutti", trainer_filter: str = "") -> list:
     session = SessionLocal()
     
-    query = session.query(Team).join(Match).options(
-        joinedload(Team.pokemon_builds).joinedload(PokemonBuild.species),
-        joinedload(Team.pokemon_builds).joinedload(PokemonBuild.ability),
-        joinedload(Team.match).joinedload(Match.turns).joinedload(Turn.actions),
-        joinedload(Team.match).joinedload(Match.teams)
+    query = session.query(MatchTeam).join(Match).options(
+        joinedload(MatchTeam.match).joinedload(Match.turns).joinedload(Turn.actions),
+        joinedload(MatchTeam.match).joinedload(Match.teams)
     )
     
     if format_filter and format_filter != "Tutti":
         query = query.filter(Match.format == format_filter)
     if trainer_filter:
-        query = query.filter(Team.trainer_id.ilike(f"%{trainer_filter}%"))
+        query = query.filter(MatchTeam.trainer_id.ilike(f"%{trainer_filter}%"))
         
     teams = query.all()
+    
+    all_sets = session.query(PokemonSet).all()
+    set_species_map = {s.id: s.species_id for s in all_sets}
+    
+    all_variants = session.query(TeamVariant).all()
+    variant_species_map = {}
+    
+    def normalize_species(sp: str) -> str:
+        if not sp: return ""
+        sp = sp.lower()
+        if sp == "floettemega": return "floetteeternal"
+        if sp == "sinistchamasterpiece": return "sinistcha"
+        if sp.endswith("megax"): return sp[:-5]
+        if sp.endswith("megay"): return sp[:-5]
+        if sp.endswith("mega"): return sp[:-4]
+        return sp
+        
+    for v in all_variants:
+        sp_set = set()
+        for sid in v.pokemon_set_ids:
+            if sid in set_species_map:
+                sp_set.add(normalize_species(set_species_map[sid]))
+        variant_species_map[v.id] = frozenset(sp_set)
     
     processed_teams = []
     
@@ -35,30 +50,7 @@ def get_team_archetypes_and_groupings(max_distance: int = 2, format_filter: str 
         N = len(match.turns)
         if N == 0: continue
         
-        def normalize_species(sp: str) -> str:
-            sp = sp.lower()
-            if sp == "floettemega": return "floetteeternal"
-            if sp == "sinistchamasterpiece": return "sinistcha"
-            if sp.endswith("megax"): return sp[:-5]
-            if sp.endswith("megay"): return sp[:-5]
-            if sp.endswith("mega"): return sp[:-4]
-            return sp
-            
-        species_ids = frozenset([normalize_species(pb.species_id) for pb in team.pokemon_builds if pb.species_id])
-        abilities = set([pb.ability.name.lower().replace(" ", "") for pb in team.pokemon_builds if pb.ability and pb.ability.name])
-        moves_list = set()
-        
-        for pb in team.pokemon_builds:
-            if pb.moves:
-                for m in pb.moves.split(","):
-                    moves_list.add(m.strip().lower())
-        
-        i_farigiraf = 1 if any("farigiraf" in sp for sp in species_ids) else 0
-        i_torkoal = 1 if any("torkoal" in sp for sp in species_ids) else 0
-        i_tornadus = 1 if any("tornadus" in sp for sp in species_ids) else 0
-        i_whimsicott = 1 if any("whimsicott" in sp for sp in species_ids) else 0
-        
-        i_drizzle = 1 if "drizzle" in abilities or "primordialsea" in abilities else 0
+        species_ids = variant_species_map.get(team.team_variant_id, frozenset())
         is_winner = 1 if match.winner_id == team.trainer_id else 0
         
         p1_name = "P1"
@@ -98,8 +90,8 @@ def get_team_archetypes_and_groupings(max_distance: int = 2, format_filter: str 
     
     from src.analytics.archetypes import analizza_archetipo_team
     for v in variants_list:
-        sp_name = "-".join(sorted(list(v["species_ids"])))[:15]
-        arch_string = analizza_archetipo_team(sp_name, v["team_ids"], session)
+        sp_list = list(v["species_ids"])
+        arch_string = analizza_archetipo_team(sp_list, v["team_ids"], session)
         v["archetypes"] = [arch_string]
     
     n_variants = len(variants_list)
@@ -131,8 +123,6 @@ def get_team_archetypes_and_groupings(max_distance: int = 2, format_filter: str 
         all_archetypes = set()
         for v in comp_variants:
             all_archetypes.update(v["archetypes"])
-            # Converte i set in liste in modo che iterandoli nella UI abbiano ordine stabile,
-            # però facciamolo in un nuovo dictionary o sovrascriviamo se non già lista
             if isinstance(v["archetypes"], set):
                 v["archetypes"] = list(v["archetypes"])
             if isinstance(v["species_ids"], frozenset) or isinstance(v["species_ids"], set):
@@ -142,7 +132,7 @@ def get_team_archetypes_and_groupings(max_distance: int = 2, format_filter: str 
             "core_species": core_species,
             "win_rate": win_rate,
             "total_matches": total_matches,
-            "num_variants": len(comp_variants) - 1, # Escludiamo se stesso dal count varianti
+            "num_variants": len(comp_variants) - 1,
             "archetypes": list(all_archetypes),
             "variants": comp_variants
         })

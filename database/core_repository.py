@@ -2,7 +2,7 @@ import itertools
 from collections import Counter
 from typing import List, Dict
 from sqlalchemy.orm import Session
-from database.models import PokemonBuild, Team, Match, PokemonSpecies
+from database.models import Match, PokemonSpecies, MatchTeam, TeamVariant, PokemonSet
 from src.domain.core_models import CoreTeammates, BuildDetails, PokemonUsageStats, CoreCombo
 
 class MetaAnalysisRepository:
@@ -13,36 +13,48 @@ class MetaAnalysisRepository:
         """
         Returns a dict of team_id -> List of dictionaries containing pokemon data.
         """
-        builds = self.session.query(
-            PokemonBuild.team_id,
-            PokemonBuild.species_id,
-            PokemonBuild.item_id,
-            PokemonBuild.nature,
-            PokemonBuild.moves
-        ).join(Team).join(Match).filter(Match.format == format_id).all()
+        match_teams = self.session.query(MatchTeam).join(Match).filter(Match.format == format_id).all()
+        
+        variant_ids = set([mt.team_variant_id for mt in match_teams if mt.team_variant_id])
+        team_variants = self.session.query(TeamVariant).filter(TeamVariant.id.in_(variant_ids)).all()
+        
+        set_ids = set()
+        for tv in team_variants:
+            if tv.pokemon_set_ids:
+                for sid in tv.pokemon_set_ids:
+                    set_ids.add(sid)
+                    
+        sets = self.session.query(PokemonSet).filter(PokemonSet.id.in_(set_ids)).all()
+        set_dict = {s.id: s for s in sets}
+        variant_dict = {tv.id: tv for tv in team_variants}
         
         teams = {}
-        for b in builds:
-            tid = b.team_id
-            if tid not in teams:
-                teams[tid] = []
-            
-            m = b.moves.split(',') if b.moves else []
-            m.sort()
-            moves_str = ",".join(m)
-            
-            item = b.item_id if b.item_id else "Nessuno"
-            nature = b.nature if b.nature else "Hardy"
-            moves_display = moves_str if moves_str else "Nessuna mossa"
-            
-            teams[tid].append({
-                'species': b.species_id,
-                'item': item,
-                'nature': nature,
-                'moves': moves_display,
-                'build_hash': f"{item}|{nature}|{moves_display}"
-            })
-            
+        for mt in match_teams:
+            tid = mt.id
+            teams[tid] = []
+            tv = variant_dict.get(mt.team_variant_id)
+            if not tv or not tv.pokemon_set_ids:
+                continue
+                
+            for sid in tv.pokemon_set_ids:
+                if sid in set_dict:
+                    b = set_dict[sid]
+                    m = b.moves.split(',') if b.moves else []
+                    m.sort()
+                    moves_str = ",".join(m)
+                    
+                    item = b.item_id if b.item_id else "Nessuno"
+                    nature = b.nature if b.nature else "Hardy"
+                    moves_display = moves_str if moves_str else "Nessuna mossa"
+                    
+                    teams[tid].append({
+                        'species': b.species_id,
+                        'item': item,
+                        'nature': nature,
+                        'moves': moves_display,
+                        'build_hash': f"{item}|{nature}|{moves_display}"
+                    })
+                    
         return teams
 
     def calculate_cores_for_pokemon(self, target_species: str, valid_teams: List[List[dict]], 

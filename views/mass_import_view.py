@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QSpinBox, QPushButton, QProgressBar, QTextEdit, QMessageBox,
     QLineEdit
 )
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import QThread, Signal, Qt
 from src.parser.showdown import parse_showdown_log
 from database.repository import save_parsed_match_to_db
 
@@ -97,6 +97,7 @@ class MassImportWidget(QWidget):
         self.parent_main = parent_main
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
 
         # Top controls
         top_layout = QHBoxLayout()
