@@ -1,25 +1,135 @@
+"""
+connection.py
+=============
+Configurazione del database PostgreSQL per JAnalytics.
+
+Legge la variabile d'ambiente DATABASE_URL da:
+  1. Variabile d'ambiente del sistema
+  2. File .env nella directory base dell'applicazione
+
+Compatibile con esecuzione diretta (Python) e build PyInstaller.
+"""
+
 import os
 import sys
-from sqlalchemy import create_engine
+from pathlib import Path
+
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-# 1. Calcola il percorso assoluto in modo compatibile con PyInstaller
+# ──────────────────────────────────────────────────────────────────────────────
+# Directory base (compatibile con PyInstaller)
+# ──────────────────────────────────────────────────────────────────────────────
 if getattr(sys, 'frozen', False):
-    # Se eseguito come eseguibile compilato da PyInstaller
-    BASE_DIR = os.path.dirname(sys.executable)
+    BASE_DIR = Path(sys.executable).parent
 else:
-    # Se eseguito come script Python
-    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    BASE_DIR = Path(__file__).parent.parent
 
-DB_PATH = os.path.join(BASE_DIR, "vgc_replays.db")
-DATABASE_URL = f"sqlite:///{DB_PATH}"
+# ──────────────────────────────────────────────────────────────────────────────
+# Caricamento variabili d'ambiente da .env (se presente)
+# ──────────────────────────────────────────────────────────────────────────────
+def _load_dotenv(base_dir: Path) -> None:
+    """Carica il file .env senza dipendere obbligatoriamente da python-dotenv."""
+    env_file = base_dir / ".env"
+    if not env_file.exists():
+        return
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(dotenv_path=str(env_file), override=False)
+    except ImportError:
+        # Fallback manuale se python-dotenv non è installato
+        with open(env_file, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    key, _, val = line.partition("=")
+                    os.environ.setdefault(key.strip(), val.strip())
 
-# 2. Imposta echo=True. Questo stamperà a schermo TUTTE le query (CREATE TABLE, INSERT, ecc.)
-engine = create_engine(DATABASE_URL, echo=True)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+_load_dotenv(BASE_DIR)
 
+# ──────────────────────────────────────────────────────────────────────────────
+# URL di connessione
+# ──────────────────────────────────────────────────────────────────────────────
+DATABASE_URL: str = os.environ.get(
+    "DATABASE_URL",
+    "postgresql://janalytics:changeme@localhost:5432/vgc_replays"
+)
+
+# Parametri pool configurabili da env
+_POOL_SIZE    = int(os.environ.get("DB_POOL_SIZE",    "5"))
+_MAX_OVERFLOW = int(os.environ.get("DB_MAX_OVERFLOW", "10"))
+_POOL_TIMEOUT = int(os.environ.get("DB_POOL_TIMEOUT", "30"))
+_ECHO         = os.environ.get("DB_ECHO", "false").lower() == "true"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Engine SQLAlchemy
+# ──────────────────────────────────────────────────────────────────────────────
+engine = create_engine(
+    DATABASE_URL,
+    echo=_ECHO,
+    pool_size=_POOL_SIZE,
+    max_overflow=_MAX_OVERFLOW,
+    pool_timeout=_POOL_TIMEOUT,
+    pool_pre_ping=True,   # verifica la connessione prima di ogni uso
+    # PostgreSQL: imposta search_path e timezone per ogni sessione
+    connect_args={
+        "options": "-c timezone=UTC"
+    },
+)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Session factory
+# ──────────────────────────────────────────────────────────────────────────────
+SessionLocal = sessionmaker(
+    autocommit=False,
+    autoflush=False,
+    bind=engine,
+)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Base dichiarativa ORM
+# ──────────────────────────────────────────────────────────────────────────────
 Base = declarative_base()
 
-def init_db():
-    """Inizializza il database creando le tabelle se non esistono."""
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Funzioni di inizializzazione
+# ──────────────────────────────────────────────────────────────────────────────
+def init_db() -> None:
+    """
+    Crea tutte le tabelle definite nei modelli (se non esistono già).
+    Equivalente a `CREATE TABLE IF NOT EXISTS` per ogni modello mappato.
+    Usare Alembic per le migrazioni in produzione.
+    """
     Base.metadata.create_all(bind=engine)
+
+
+def test_connection() -> bool:
+    """
+    Verifica che la connessione al database sia attiva.
+    Restituisce True se OK, False in caso di errore.
+    """
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        return True
+    except Exception as e:
+        print(f"[DB] Errore di connessione: {e}")
+        return False
+
+
+def get_db_info() -> dict:
+    """Restituisce informazioni sulla connessione attiva (per debug/UI)."""
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text(
+                "SELECT current_database(), current_user, version()"
+            )).fetchone()
+            return {
+                "database": result[0],
+                "user": result[1],
+                "version": result[2].split(",")[0],
+                "url": DATABASE_URL.split("@")[-1] if "@" in DATABASE_URL else DATABASE_URL,
+            }
+    except Exception as e:
+        return {"error": str(e)}

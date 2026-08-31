@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 from database.connection import SessionLocal
-from database.models import PokemonSpecies, PokemonSet
+from database.models_v2 import PokemonSpeciesV2, PokemonBuild
 from views.base_view import BaseHeaderWidget
 
 class PokedexWidget(BaseHeaderWidget):
@@ -67,13 +67,13 @@ class PokedexWidget(BaseHeaderWidget):
         self.tree.clear()
         session = SessionLocal()
         try:
-            q = session.query(PokemonSpecies)
+            q = session.query(PokemonSpeciesV2)
             
             txt = self.search_bar.text().strip().lower()
             if txt:
-                q = q.filter(PokemonSpecies.name.ilike(f"%{txt}%"))
+                q = q.filter(PokemonSpeciesV2.name.ilike(f"%{txt}%"))
                 
-            species_list = q.order_by(PokemonSpecies.num, PokemonSpecies.name).all()
+            species_list = q.order_by(PokemonSpeciesV2.num, PokemonSpeciesV2.name).all()
             
             groups = {}
             for sp in species_list:
@@ -111,10 +111,16 @@ class PokedexWidget(BaseHeaderWidget):
                 
             self.lbl_name.setText(f"{sp.name} (#{sp.num})")
             
-            types_str = " / ".join(sp.types) if sp.types else "Sconosciuto"
+            types = []
+            if sp.type1: types.append(sp.type1)
+            if sp.type2: types.append(sp.type2)
+            types_str = " / ".join(types) if types else "Sconosciuto"
             self.lbl_types.setText(f"Tipi: {types_str}")
             
-            stats = sp.base_stats if sp.base_stats else {}
+            stats = {
+                "hp": sp.bst_hp, "atk": sp.bst_atk, "def": sp.bst_def,
+                "spa": sp.bst_spa, "spd": sp.bst_spd, "spe": sp.bst_spe
+            }
             for stat_key, bar in self.bars.items():
                 val = stats.get(stat_key, 0)
                 bar.setValue(val)
@@ -123,8 +129,8 @@ class PokedexWidget(BaseHeaderWidget):
                 bar.setStyleSheet(f"QProgressBar::chunk {{ background-color: {color}; }}")
                 
             # Usage
-            usage_count = session.query(PokemonSet).filter_by(species_id=pkmn_id).count()
-            self.lbl_usage.setText(f"Utilizzi registrati in partita: {usage_count}")
+            usage_count = session.query(PokemonBuild).filter_by(species_id=pkmn_id).count()
+            self.lbl_usage.setText(f"Utilizzi registrati in partita (build uniche): {usage_count}")
                 
         finally:
             session.close()

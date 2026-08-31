@@ -6,11 +6,11 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QSplitter, QFrame, QLabel, QListWidget,
     QListWidgetItem, QPushButton, QTextBrowser, QTreeWidget, QTreeWidgetItem,
-    QTabWidget
+    QTabWidget, QScrollArea
 )
 from PySide6.QtCore import Qt, Signal, QUrl
 from PySide6.QtGui import QColor, QPixmap
-from database.repository import get_match_details
+from database.repository_v2 import get_match_details_v2
 
 import matplotlib
 matplotlib.use('qtagg')
@@ -76,24 +76,7 @@ ACTION_ICONS = {
 }
 
 
-def get_pokemon_icon_path(species_name):
-    if not species_name or species_name in ("Vuoto", ""):
-        return None
-    name = species_name.lower().replace(" ", "").replace("-", "")
-    icon_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "assets", "icons"))
-    os.makedirs(icon_dir, exist_ok=True)
-    icon_path = os.path.join(icon_dir, f"{name}.png")
-    if not os.path.exists(icon_path):
-        url = f"https://play.pokemonshowdown.com/sprites/dex/{name}.png"
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=3) as r:
-                with open(icon_path, "wb") as f:
-                    f.write(r.read())
-        except Exception as e:
-            print(f"[sprite] {name}: {e}")
-            return None
-    return icon_path.replace("\\", "/")
+from src.utils.icon_utils import get_pokemon_icon_path
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -106,15 +89,28 @@ class ReplayAnalyzerUI(QWidget):
         super().__init__(parent)
         self.setWindowTitle("Replay Analyzer")
         self.match_data = {}
+        self._sim_states = {}  # (turn_num, action_order) -> simulated state dict
         self.setup_ui()
         self.setup_connections()
 
     # ── SETUP UI ──────────────────────────────────────────────────────────────
 
     def setup_ui(self):
-        self.main_layout = QVBoxLayout(self)
+        self.base_layout = QVBoxLayout(self)
+        self.base_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFrameShape(QFrame.NoFrame)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        
+        self.scroll_widget = QWidget()
+        self.main_layout = QVBoxLayout(self.scroll_widget)
         self.main_layout.setSpacing(4)
         self.main_layout.setContentsMargins(6, 6, 6, 6)
+        
+        self.scroll_area.setWidget(self.scroll_widget)
+        self.base_layout.addWidget(self.scroll_area)
 
         # Top bar
         top = QHBoxLayout()
@@ -176,6 +172,7 @@ class ReplayAnalyzerUI(QWidget):
 
         # Bottom tabs
         self.bottom_tabs = QTabWidget()
+        self.bottom_tabs.setMinimumHeight(500)
         self.main_layout.addWidget(self.bottom_tabs, 1)
 
         # Prima tab: Event Log e Board
@@ -234,17 +231,17 @@ class ReplayAnalyzerUI(QWidget):
         p1c = QVBoxLayout()
         p1c.addWidget(QLabel("Cond. P1:"))
         self.list_condizioni_p1 = QListWidget()
-        self.list_condizioni_p1.setMaximumHeight(90)
+        self.list_condizioni_p1.setMinimumHeight(120)
         p1c.addWidget(self.list_condizioni_p1)
         gc = QVBoxLayout()
         gc.addWidget(QLabel("Globali:"))
         self.list_condizioni_generali = QListWidget()
-        self.list_condizioni_generali.setMaximumHeight(90)
+        self.list_condizioni_generali.setMinimumHeight(120)
         gc.addWidget(self.list_condizioni_generali)
         p2c = QVBoxLayout()
         p2c.addWidget(QLabel("Cond. P2:"))
         self.list_condizioni_p2 = QListWidget()
-        self.list_condizioni_p2.setMaximumHeight(90)
+        self.list_condizioni_p2.setMinimumHeight(120)
         p2c.addWidget(self.list_condizioni_p2)
         cond_lay.addLayout(p1c)
         cond_lay.addLayout(gc)
@@ -309,7 +306,7 @@ class ReplayAnalyzerUI(QWidget):
     # ── DISPLAY MATCH ─────────────────────────────────────────────────────────
 
     def display_match(self, match_id: str):
-        self.match_data = get_match_details(match_id)
+        self.match_data = get_match_details_v2(match_id)
         if not self.match_data:
             return
         fmt = self.match_data.get("format", "Regolamento Sconosciuto")
@@ -392,7 +389,7 @@ class ReplayAnalyzerUI(QWidget):
         """Return tags dict from action, keys lowercased.
         DB stores: {"damage": [["p1a: Ttar", "200/350"], ...], "weather": [["SunnyDay", "[from] ability: Drought", "[of] p1a: Char"]]}
         No re-splitting needed."""
-        tags = act.get("tags", {})
+        tags = act.get("raw_tags", {})
         if not tags:
             return {}
         if isinstance(tags, str):
@@ -432,6 +429,7 @@ class ReplayAnalyzerUI(QWidget):
     def populate_turns(self, match_data: dict):
         self.list_widget_turni.clear()
         self.list_widget_azioni.clear()
+        self._sim_states = {}   # Reset: (turn_num, action_order) -> sim dict
 
         # Running simulated state across ALL turns/actions in chronological order
         sim = {
@@ -455,7 +453,7 @@ class ReplayAnalyzerUI(QWidget):
         }
 
         for turn in match_data.get("turns", []):
-            turn_num = turn.get("turn_number", "?")
+            turn_num = turn.get("turn_number", 0)
             conds = []
             if sim["weather"]:
                 wn = sim["weather"][0] if isinstance(sim["weather"], list) else sim["weather"]
@@ -471,9 +469,11 @@ class ReplayAnalyzerUI(QWidget):
             turn_item.setData(Qt.UserRole, turn)
             self.list_widget_turni.addItem(turn_item)
 
+            # board_state is at turn level (also injected into actions by repo)
+            board = turn.get("board_state", {})
             for act in turn.get("actions", []):
+                action_order = act.get("order", 0)
                 tags = self._get_tags(act)
-                board = act.get("board_state", {})
                 try:
                     # Weather
                     for ev in self._get_events(tags, "weather"):
@@ -504,11 +504,9 @@ class ReplayAnalyzerUI(QWidget):
                                     sim["terrain"] = None
 
                     # Sidestart / Sideend (Tailwind, Reflect, Light Screen)
-                    # ev[1] examples: "move: Tailwind", "move: Reflect", "move: Light Screen"
                     for ev in self._get_events(tags, "sidestart"):
                         if len(ev) >= 2:
                             p = "p1" if ev[0].strip().startswith("p1") else "p2"
-                            # Strip "move: " / "ability: " prefix before matching
                             effect = ev[1].lower().split(":")[-1].strip()
                             if "tailwind" in effect:         sim[f"{p}_tailwind"] = True
                             elif "reflect" in effect:        sim[f"{p}_reflect"] = True
@@ -601,7 +599,8 @@ class ReplayAnalyzerUI(QWidget):
                 except Exception as e:
                     print(f"[populate_turns] {act.get('type','?')}: {e}")
 
-                act["simulated_state"] = copy.deepcopy(sim)
+                # Store simulated state in class-level dict — avoids Qt setData/data reference issues
+                self._sim_states[(turn_num, action_order)] = copy.deepcopy(sim)
 
         if self.list_widget_turni.count():
             self.list_widget_turni.setCurrentRow(0)
@@ -617,6 +616,7 @@ class ReplayAnalyzerUI(QWidget):
         turn_data = item.data(Qt.UserRole)
         if not turn_data or not isinstance(turn_data, dict):
             return
+        turn_num = turn_data.get("turn_number", 0)
         for act in turn_data.get("actions", []):
             act_type = act.get("type", "?")
             details = act.get("details", "")
@@ -626,7 +626,9 @@ class ReplayAnalyzerUI(QWidget):
             if details:
                 label += f" — {details}"
             act_item = QListWidgetItem(label)
-            act_item.setData(Qt.UserRole, act)
+            # Store (action_dict, turn_num, action_order) so on_action_clicked
+            # can read board from action_dict AND look up sim from self._sim_states
+            act_item.setData(Qt.UserRole, (act, turn_num, act.get("order", 0)))
             colors = {"move": "#141414", "switch": "#1a1a1a",
                       "cant": "#0a0a0a", "faint": "#2a1414"}
             act_item.setBackground(QColor(colors.get(act_type, "#1A1A1A")))
@@ -635,12 +637,24 @@ class ReplayAnalyzerUI(QWidget):
     # ── ON ACTION CLICKED ─────────────────────────────────────────────────────
 
     def on_action_clicked(self, item: QListWidgetItem):
-        action_data = item.data(Qt.UserRole)
-        if not action_data or not isinstance(action_data, dict):
+        raw = item.data(Qt.UserRole)
+        if not raw:
+            return
+        # Support both old plain-dict format and new (action_dict, turn_num, action_order) tuple
+        if isinstance(raw, tuple):
+            action_data, turn_num, action_order = raw
+        else:
+            action_data = raw
+            turn_num = action_data.get("turn_number", 0)
+            action_order = action_data.get("order", 0)
+
+        if not isinstance(action_data, dict):
             return
 
-        board      = action_data.get("board_state", {})
-        sim        = action_data.get("simulated_state", {})
+        # board_state is baked into action at repository level
+        board = action_data.get("board_state", {})
+        # sim state is stored in class-level dict — immune to Qt setData reference issues
+        sim = self._sim_states.get((turn_num, action_order), {})
         hp_map     = sim.get("hp", {})
         status_map = sim.get("status", {})
         boost_map  = sim.get("boosts", {})
@@ -652,8 +666,8 @@ class ReplayAnalyzerUI(QWidget):
         def format_slot(prefix, slot_data):
             if not isinstance(slot_data, dict):
                 return f"<b>{prefix}</b><br><i style='color:#666'>(Vuoto)</i>"
-            species = slot_data.get("name", "")
-            if not species:
+            species = slot_data.get("species", "")
+            if not species or species == "Vuoto":
                 return f"<b>{prefix}</b><br><i style='color:#666'>(Vuoto)</i>"
             bid = slot_data.get("id")
             hp_raw  = hp_map.get(bid, "")
@@ -849,7 +863,7 @@ class ReplayAnalyzerUI(QWidget):
 
     def _populate_tag_tree(self, action_data: dict):
         self.tree_widget_tags.clear()
-        tags = action_data.get("tags", {})
+        tags = action_data.get("raw_tags", {})
         if isinstance(tags, str):
             try:
                 tags = json.loads(tags)

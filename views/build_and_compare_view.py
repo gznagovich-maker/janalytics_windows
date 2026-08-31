@@ -19,6 +19,11 @@ from src.domain.team_builder_service import (
 from src.domain.type_chart import TYPE_DATA, get_multiplier
 from views.pokemon_edit_view import PokemonEditPage
 from src.domain.type_chart import TYPE_DATA, get_multiplier
+from views.pokemon_edit_view import PokemonEditPage
+from views.batch_damage_dialogs import BatchDamageConfigDialog, BatchDamageResultDialog
+from src.domain.batch_generator_service import BatchGeneratorService
+from domain.smogon_calc import SmogonDamageCalc
+from domain.batch_analyzer import BatchDamageAnalyzer
 
 TYPE_COLORS = {
     "Normal": "#A8A77A", "Fire": "#EE8130", "Water": "#6390F0",
@@ -29,10 +34,12 @@ TYPE_COLORS = {
     "Dark": "#705746", "Steel": "#B7B7CE", "Fairy": "#D685AD"
 }
 
+from src.utils.icon_utils import get_pokemon_icon_path
+
 def get_pokemon_pixmap(species: str, size: int = 32) -> QPixmap:
     if not species: return None
-    path = os.path.join("assets", "icons", f"{species.lower()}.png")
-    if os.path.exists(path):
+    path = get_pokemon_icon_path(species)
+    if path and os.path.exists(path):
         return QPixmap(path).scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
     return None
 
@@ -306,26 +313,36 @@ class BuildAndCompareWidget(QWidget):
             main_win.show_loading("Parsing del team in corso...")
         QApplication.processEvents()
         
+        if not hasattr(self, 'corrections'):
+            self.corrections = {}
+            
         try:
-            members = parse_pokepaste(paste)
+            from src.domain.exceptions import EntityNotFoundError
+            from views.resolution_modal import EntityResolutionDialog
+            
+            members = None
+            while True:
+                try:
+                    members = parse_pokepaste(paste, corrections=self.corrections)
+                    break
+                except EntityNotFoundError as e:
+                    if hasattr(main_win, "hide_loading"):
+                        main_win.hide_loading()
+                    dialog = EntityResolutionDialog(e, self)
+                    if dialog.exec() == QDialog.Accepted:
+                        self.corrections[e.raw_name] = dialog.selected_name
+                        if hasattr(main_win, "show_loading"):
+                            main_win.show_loading("Ripresa parsing...")
+                        QApplication.processEvents()
+                    else:
+                        return
+                        
             if not members:
                 if hasattr(main_win, "hide_loading"):
                     main_win.hide_loading()
                 QMessageBox.warning(self, "Errore", "Impossibile parsare il team.")
                 return
                 
-            for m in members:
-                if not m.types:
-                    dialog = PokemonSelectionDialog(m.species, self)
-                    if dialog.exec() == QDialog.Accepted:
-                        new_species = dialog.get_selected_pokemon()
-                        m.species = new_species
-                        m.types = get_species_types(new_species)
-                    else:
-                        if hasattr(main_win, "hide_loading"):
-                            main_win.hide_loading()
-                        return
-                        
             self.teams.append({"members": members})
             self.txt_paste.clear()
             self._render_explorer()
@@ -375,9 +392,25 @@ class BuildAndCompareWidget(QWidget):
             )
             btn_delete.clicked.connect(lambda checked=False, i=idx: self._delete_team(i))
             
+            btn_batch = QPushButton("Analisi Batch Danni")
+            btn_batch.setStyleSheet(
+                f"QPushButton {{ background-color: {Palette.PRIMARY}; color: {Palette.BG_APP}; border: none; padding: 6px 12px; border-radius: 4px; font-weight: bold; }}"
+                f"QPushButton:hover {{ background-color: {Palette.TEXT_PRIMARY}; }}"
+            )
+            btn_batch.clicked.connect(lambda checked=False, i=idx: self.on_batch_damage_analysis(i))
+            
+            btn_copy = QPushButton("📋 Copia Paste")
+            btn_copy.setStyleSheet(
+                f"QPushButton {{ background-color: {Palette.PRIMARY}; color: {Palette.BG_APP}; border: none; padding: 6px 12px; border-radius: 4px; font-weight: bold; }}"
+                f"QPushButton:hover {{ background-color: {Palette.TEXT_PRIMARY}; }}"
+            )
+            btn_copy.clicked.connect(lambda checked=False, i=idx: self._copy_team(i))
+            
             header_layout.addWidget(lbl_title)
             header_layout.addStretch()
+            header_layout.addWidget(btn_copy)
             header_layout.addWidget(btn_analyze)
+            header_layout.addWidget(btn_batch)
             header_layout.addWidget(btn_delete)
             team_layout.addLayout(header_layout)
             
@@ -413,8 +446,57 @@ class BuildAndCompareWidget(QWidget):
             
     def _delete_team(self, idx: int):
         if 0 <= idx < len(self.teams):
-            self.teams.pop(idx)
+            del self.teams[idx]
             self._render_explorer()
+            
+    def _copy_team(self, idx: int):
+        if not (0 <= idx < len(self.teams)): return
+        
+        team_data = self.teams[idx]
+        paste = ""
+        
+        def to_champ_ev(val: int) -> int:
+            return (val + 4) // 8 if val > 0 else 0
+            
+        for member in team_data.get("members", []):
+            header = member.species.capitalize()
+            if member.item:
+                header += f" @ {member.item}"
+            paste += f"{header}\n"
+            
+            if member.ability:
+                paste += f"Ability: {member.ability}\n"
+                
+            paste += f"Level: {member.level if hasattr(member, 'level') and member.level else 50}\n"
+            
+            evs = member.evs
+            total_evs = sum(evs.values())
+            is_champ = total_evs <= 66
+            
+            display_labels = ["HP", "Atk", "Def", "SpA", "SpD", "Spe"]
+            
+            ev_strings = []
+            for label in display_labels:
+                # Cerca in vari formati di chiave
+                val = evs.get(label, evs.get(label.lower(), evs.get(label.upper(), 0)))
+                if val > 0:
+                    c_val = val if is_champ else to_champ_ev(val)
+                    ev_strings.append(f"{c_val} {label}")
+                    
+            if ev_strings:
+                paste += f"EVs: {' / '.join(ev_strings)}\n"
+                
+            if member.nature:
+                paste += f"{member.nature} Nature\n"
+                
+            for m in member.moves:
+                if m:
+                    paste += f"- {m}\n"
+                    
+            paste += "\n"
+            
+        if paste:
+            QApplication.clipboard().setText(paste.strip())
             
     def _edit_member(self, t_idx: int, m_idx: int):
         main_win = self.window()
@@ -435,6 +517,57 @@ class BuildAndCompareWidget(QWidget):
     def _on_pokemon_updated(self):
         self._render_explorer()
             
+    def on_batch_damage_analysis(self, index: int):
+        team = self.teams[index]
+        
+        dialog = BatchDamageConfigDialog(self)
+        if dialog.exec() == QDialog.Accepted:
+            main_win = self.window()
+            if hasattr(main_win, "show_loading"):
+                main_win.show_loading("Elaborazione batch in corso...")
+            QApplication.processEvents()
+            
+            try:
+                target_type = dialog.selected_target_type
+                if target_type == "Formato":
+                    meta_threats = BatchGeneratorService.generate_threats_from_format(
+                        dialog.selected_format, 
+                        dialog.min_usage
+                    )
+                else:
+                    # Raccoglie gli altri team caricati
+                    other_teams = [t for i, t in enumerate(self.teams) if i != index]
+                    meta_threats = BatchGeneratorService.generate_threats_from_teams(other_teams)
+                
+                # Prepara il team target
+                team_data = []
+                for m in team["members"]:
+                    team_data.append({
+                        "name": m.species,
+                        "options": {
+                            "nature": m.nature,
+                            "item": m.item,
+                            "evs": m.evs
+                        },
+                        "moves": [mv for mv in m.moves if mv]
+                    })
+                
+                calc = SmogonDamageCalc(db_path="janalytics.db")
+                analyzer = BatchDamageAnalyzer(calc)
+                
+                def_results, off_results, switch_results = analyzer.perform_full_analysis(team_data, meta_threats)
+                
+                if hasattr(main_win, "hide_loading"):
+                    main_win.hide_loading()
+                    
+                result_dialog = BatchDamageResultDialog(def_results, off_results, switch_results, team_data, self)
+                result_dialog.exec()
+                
+            except Exception as e:
+                if hasattr(main_win, "hide_loading"):
+                    main_win.hide_loading()
+                QMessageBox.critical(self, "Errore", f"Errore durante l'analisi batch: {e}")
+
     def on_analyze_team(self, index: int):
         if index < 0 or index >= len(self.teams):
             return

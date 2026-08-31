@@ -12,7 +12,8 @@ from PySide6.QtCharts import (
 )
 
 from database.connection import SessionLocal
-from database.models import Match, MatchTeam, PokemonSet, PokemonSpecies, Item, TeamVariant
+from database.models_v2 import MatchV2, MatchTeamV2, PokemonBuild, PokemonSpeciesV2, TeamVariantV2, TeamVariantBuild
+from sqlalchemy.orm import selectinload
 
 
 class MetaStatsWidget(QWidget):
@@ -26,6 +27,7 @@ class MetaStatsWidget(QWidget):
         self.selected_pokemon = None
         self.selected_nature = None
         self.selected_item = None
+        self.selected_ability = None
         self.selected_move = None
         
         self.stat_colors = {
@@ -343,6 +345,20 @@ class MetaStatsWidget(QWidget):
         self.item_table.itemSelectionChanged.connect(self.on_item_selection_changed)
         right_layout.addWidget(self.item_table)
         
+        self.ability_label = QLabel("Distribuzione Abilità")
+        self.ability_label.setStyleSheet("font-weight: bold;")
+        right_layout.addWidget(self.ability_label)
+        
+        self.ability_table = QTableWidget()
+        self.ability_table.setColumnCount(2)
+        self.ability_table.setHorizontalHeaderLabels(["Abilità", "Percentuale (%)"])
+        self.ability_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.ability_table.setSortingEnabled(True)
+        self.ability_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.ability_table.setSelectionMode(QTableWidget.SingleSelection)
+        self.ability_table.itemSelectionChanged.connect(self.on_ability_selection_changed)
+        right_layout.addWidget(self.ability_table)
+        
         self.moves_label = QLabel("Distribuzione Mosse")
         self.moves_label.setStyleSheet("font-weight: bold;")
         right_layout.addWidget(self.moves_label)
@@ -401,7 +417,7 @@ class MetaStatsWidget(QWidget):
     def load_formats(self):
         session = SessionLocal()
         try:
-            formats = session.query(Match.format).distinct().all()
+            formats = session.query(MatchV2.format).distinct().all()
             self.format_combo.blockSignals(True)
             self.format_combo.clear()
             for (f,) in formats:
@@ -409,11 +425,16 @@ class MetaStatsWidget(QWidget):
                     self.format_combo.addItem(f)
             self.format_combo.blockSignals(False)
             
-            all_species = session.query(PokemonSpecies).order_by(PokemonSpecies.name).all()
+            all_species = session.query(PokemonSpeciesV2).order_by(PokemonSpeciesV2.name).all()
             self.calc_pokemon_combo.blockSignals(True)
             self.calc_pokemon_combo.clear()
             for sp in all_species:
-                self.calc_pokemon_combo.addItem(sp.name, sp.base_stats)
+                # Need to check how base_stats are stored in V2. Let's pass a dummy dict for now if it fails, or construct one.
+                base_stats = {
+                    "hp": sp.bst_hp, "atk": sp.bst_atk, "def": sp.bst_def,
+                    "spa": sp.bst_spa, "spd": sp.bst_spd, "spe": sp.bst_spe
+                }
+                self.calc_pokemon_combo.addItem(sp.name, base_stats)
             self.calc_pokemon_combo.completer().setModel(self.calc_pokemon_combo.model())
             self.calc_pokemon_combo.blockSignals(False)
             
@@ -431,41 +452,47 @@ class MetaStatsWidget(QWidget):
             
         session = SessionLocal()
         try:
-            match_teams = session.query(MatchTeam, Match, TeamVariant)\
-                .join(Match, MatchTeam.match_id == Match.id)\
-                .join(TeamVariant, MatchTeam.team_variant_id == TeamVariant.id)\
-                .filter(Match.format == fmt).all()
+            match_teams = session.query(MatchTeamV2, MatchV2, TeamVariantV2)\
+                .join(MatchV2, MatchTeamV2.match_id == MatchV2.id)\
+                .join(TeamVariantV2, MatchTeamV2.team_variant_id == TeamVariantV2.id)\
+                .options(
+                    selectinload(TeamVariantV2.builds).selectinload(TeamVariantBuild.build).selectinload(PokemonBuild.move_slots),
+                    selectinload(TeamVariantV2.builds).selectinload(TeamVariantBuild.build).selectinload(PokemonBuild.item),
+                    selectinload(TeamVariantV2.builds).selectinload(TeamVariantBuild.build).selectinload(PokemonBuild.ability)
+                )\
+                .filter(MatchV2.format == fmt).all()
                 
-            all_sets = session.query(PokemonSet).all()
-            set_dict = {s.id: s for s in all_sets}
-            
-            all_species = session.query(PokemonSpecies).all()
+            all_species = session.query(PokemonSpeciesV2).all()
             species_dict = {sp.id: sp.name for sp in all_species}
             
             builds = []
             species_ids = set()
             
             for mt, m, tv in match_teams:
-                if not tv.pokemon_set_ids: continue
-                for set_id in tv.pokemon_set_ids:
-                    if set_id in set_dict:
-                        pset = set_dict[set_id]
-                        sp_name = species_dict.get(pset.species_id, "Sconosciuto")
-                        if pset.species_id:
-                            species_ids.add(pset.species_id)
+                for tvb in tv.builds:
+                    if tvb.build:
+                        b = tvb.build
+                        sp_name = species_dict.get(b.species_id, "Sconosciuto")
+                        if b.species_id:
+                            species_ids.add(b.species_id)
+                        item_name = b.item.name if b.item else (b.item_id.capitalize() if b.item_id else "Nessuno")
+                        ability_name = b.ability.name if b.ability else (b.ability_id.capitalize() if b.ability_id else "Sconosciuta")
+                        
+                        moves = [ms.move_id for ms in b.move_slots] if b.move_slots else []
                         builds.append((
                             sp_name,
                             mt.trainer_id,
                             m.winner_id,
-                            pset.nature,
-                            pset.item_id,
-                            pset.moves
+                            b.nature,
+                            item_name,
+                            ability_name,
+                            moves
                         ))
                         
             self.current_format_builds = builds
             
             self.builds_usage = {}
-            for name, trainer_id, winner_id, nature, item_name, moves in builds:
+            for name, trainer_id, winner_id, nature, item_name, ability_name, moves in builds:
                 self.builds_usage[name] = self.builds_usage.get(name, 0) + 1
             self.total_builds = len(builds)
             
@@ -476,7 +503,7 @@ class MetaStatsWidget(QWidget):
             self.usage_label_value.setText("≥ 0")
             self.filter_usage.blockSignals(False)
             
-            species_list = session.query(PokemonSpecies).filter(PokemonSpecies.id.in_(species_ids)).order_by(PokemonSpecies.name).all()
+            species_list = session.query(PokemonSpeciesV2).filter(PokemonSpeciesV2.id.in_(species_ids)).order_by(PokemonSpeciesV2.name).all()
             
             self.roster_list.blockSignals(True)
             self.roster_list.clear()
@@ -515,7 +542,7 @@ class MetaStatsWidget(QWidget):
             return
             
         stats = {}
-        for name, trainer_id, winner_id, nature, item_name, moves in self.current_format_builds:
+        for name, trainer_id, winner_id, nature, item_name, ability_name, moves in self.current_format_builds:
             if name not in stats:
                 stats[name] = {"usage": 0, "wins": 0}
             stats[name]["usage"] += 1
@@ -559,6 +586,7 @@ class MetaStatsWidget(QWidget):
             
         self.selected_nature = None
         self.selected_item = None
+        self.selected_ability = None
         self.selected_move = None
         
         self.nature_table.blockSignals(True)
@@ -568,6 +596,10 @@ class MetaStatsWidget(QWidget):
         self.item_table.blockSignals(True)
         self.item_table.clearSelection()
         self.item_table.blockSignals(False)
+        
+        self.ability_table.blockSignals(True)
+        self.ability_table.clearSelection()
+        self.ability_table.blockSignals(False)
 
         self.moves_table.blockSignals(True)
         self.moves_table.clearSelection()
@@ -575,6 +607,7 @@ class MetaStatsWidget(QWidget):
         
         self.update_nature_table()
         self.update_item_table()
+        self.update_ability_table()
         self.update_moves_table()
 
     def on_nature_selection_changed(self):
@@ -583,6 +616,7 @@ class MetaStatsWidget(QWidget):
             if self.selected_nature is not None:
                 self.selected_nature = None
                 self.update_item_table()
+                self.update_ability_table()
                 self.update_moves_table()
             return
             
@@ -597,12 +631,18 @@ class MetaStatsWidget(QWidget):
             self.selected_item = None
             self.item_table.blockSignals(False)
             
+            self.ability_table.blockSignals(True)
+            self.ability_table.clearSelection()
+            self.selected_ability = None
+            self.ability_table.blockSignals(False)
+            
             self.moves_table.blockSignals(True)
             self.moves_table.clearSelection()
             self.selected_move = None
             self.moves_table.blockSignals(False)
             
             self.update_item_table()
+            self.update_ability_table()
             self.update_moves_table()
 
     def on_item_selection_changed(self):
@@ -611,6 +651,7 @@ class MetaStatsWidget(QWidget):
             if self.selected_item is not None:
                 self.selected_item = None
                 self.update_nature_table()
+                self.update_ability_table()
                 self.update_moves_table()
             return
             
@@ -625,12 +666,53 @@ class MetaStatsWidget(QWidget):
             self.selected_nature = None
             self.nature_table.blockSignals(False)
             
+            self.ability_table.blockSignals(True)
+            self.ability_table.clearSelection()
+            self.selected_ability = None
+            self.ability_table.blockSignals(False)
+            
             self.moves_table.blockSignals(True)
             self.moves_table.clearSelection()
             self.selected_move = None
             self.moves_table.blockSignals(False)
             
             self.update_nature_table()
+            self.update_ability_table()
+            self.update_moves_table()
+
+    def on_ability_selection_changed(self):
+        selected_items = self.ability_table.selectedItems()
+        if not selected_items:
+            if self.selected_ability is not None:
+                self.selected_ability = None
+                self.update_nature_table()
+                self.update_item_table()
+                self.update_moves_table()
+            return
+            
+        row = selected_items[0].row()
+        ability = self.ability_table.item(row, 0).text()
+        
+        if self.selected_ability != ability:
+            self.selected_ability = ability
+            
+            self.nature_table.blockSignals(True)
+            self.nature_table.clearSelection()
+            self.selected_nature = None
+            self.nature_table.blockSignals(False)
+            
+            self.item_table.blockSignals(True)
+            self.item_table.clearSelection()
+            self.selected_item = None
+            self.item_table.blockSignals(False)
+            
+            self.moves_table.blockSignals(True)
+            self.moves_table.clearSelection()
+            self.selected_move = None
+            self.moves_table.blockSignals(False)
+            
+            self.update_nature_table()
+            self.update_item_table()
             self.update_moves_table()
 
     def on_move_selection_changed(self):
@@ -640,6 +722,7 @@ class MetaStatsWidget(QWidget):
                 self.selected_move = None
                 self.update_nature_table()
                 self.update_item_table()
+                self.update_ability_table()
             return
             
         row = selected_items[0].row()
@@ -658,8 +741,14 @@ class MetaStatsWidget(QWidget):
             self.selected_item = None
             self.item_table.blockSignals(False)
             
+            self.ability_table.blockSignals(True)
+            self.ability_table.clearSelection()
+            self.selected_ability = None
+            self.ability_table.blockSignals(False)
+            
             self.update_nature_table()
             self.update_item_table()
+            self.update_ability_table()
 
     def update_nature_table(self):
         self.nature_table.blockSignals(True)
@@ -674,6 +763,7 @@ class MetaStatsWidget(QWidget):
             
         filters_str = []
         if self.selected_item: filters_str.append(f"Strum: {self.selected_item}")
+        if self.selected_ability: filters_str.append(f"Abilità: {self.selected_ability}")
         if self.selected_move: filters_str.append(f"Mossa: {self.selected_move}")
         
         if filters_str:
@@ -684,12 +774,15 @@ class MetaStatsWidget(QWidget):
         natures_count = {}
         total = 0
         
-        for name, trainer_id, winner_id, nature, item_name, moves in self.current_format_builds:
+        for name, trainer_id, winner_id, nature, item_name, ability_name, moves in self.current_format_builds:
             if name == self.selected_pokemon:
                 itm = item_name if item_name else "Nessuno"
-                mov_list = moves.split(',') if moves else []
+                abi = ability_name if ability_name else "Sconosciuta"
+                mov_list = moves if isinstance(moves, list) else (moves.split(',') if moves else [])
                 
                 if self.selected_item and itm != self.selected_item:
+                    continue
+                if self.selected_ability and abi != self.selected_ability:
                     continue
                 if self.selected_move and self.selected_move not in mov_list:
                     continue
@@ -733,6 +826,7 @@ class MetaStatsWidget(QWidget):
             
         filters_str = []
         if self.selected_nature: filters_str.append(f"Nat: {self.selected_nature}")
+        if self.selected_ability: filters_str.append(f"Abilità: {self.selected_ability}")
         if self.selected_move: filters_str.append(f"Mossa: {self.selected_move}")
         
         if filters_str:
@@ -743,12 +837,15 @@ class MetaStatsWidget(QWidget):
         items_count = {}
         total = 0
         
-        for name, trainer_id, winner_id, nature, item_name, moves in self.current_format_builds:
+        for name, trainer_id, winner_id, nature, item_name, ability_name, moves in self.current_format_builds:
             if name == self.selected_pokemon:
                 nat = nature if nature else "Sconosciuta"
-                mov_list = moves.split(',') if moves else []
+                abi = ability_name if ability_name else "Sconosciuta"
+                mov_list = moves if isinstance(moves, list) else (moves.split(',') if moves else [])
                 
                 if self.selected_nature and nat != self.selected_nature:
+                    continue
+                if self.selected_ability and abi != self.selected_ability:
                     continue
                 if self.selected_move and self.selected_move not in mov_list:
                     continue
@@ -779,6 +876,69 @@ class MetaStatsWidget(QWidget):
                     break
         self.item_table.blockSignals(False)
 
+    def update_ability_table(self):
+        self.ability_table.blockSignals(True)
+        self.ability_table.setSortingEnabled(False)
+        self.ability_table.setRowCount(0)
+        
+        if not self.selected_pokemon or not self.current_format_builds:
+            self.ability_label.setText("Distribuzione Abilità")
+            self.ability_table.setSortingEnabled(True)
+            self.ability_table.blockSignals(False)
+            return
+            
+        filters_str = []
+        if self.selected_nature: filters_str.append(f"Nat: {self.selected_nature}")
+        if self.selected_item: filters_str.append(f"Strum: {self.selected_item}")
+        if self.selected_move: filters_str.append(f"Mossa: {self.selected_move}")
+        
+        if filters_str:
+            self.ability_label.setText(f"Abilità per {self.selected_pokemon} ({', '.join(filters_str)})")
+        else:
+            self.ability_label.setText(f"Distribuzione Abilità per: {self.selected_pokemon}")
+            
+        abilities_count = {}
+        total = 0
+        
+        for name, trainer_id, winner_id, nature, item_name, ability_name, moves in self.current_format_builds:
+            if name == self.selected_pokemon:
+                nat = nature if nature else "Sconosciuta"
+                itm = item_name if item_name else "Nessuno"
+                mov_list = moves if isinstance(moves, list) else (moves.split(',') if moves else [])
+                
+                if self.selected_nature and nat != self.selected_nature:
+                    continue
+                if self.selected_item and itm != self.selected_item:
+                    continue
+                if self.selected_move and self.selected_move not in mov_list:
+                    continue
+                    
+                total += 1
+                abi = ability_name if ability_name else "Sconosciuta"
+                abilities_count[abi] = abilities_count.get(abi, 0) + 1
+                
+        self.ability_table.setRowCount(len(abilities_count))
+        row = 0
+        for abi, count in abilities_count.items():
+            pct = (count / total * 100) if total > 0 else 0
+            w_abi = QTableWidgetItem(abi)
+            w_pct = QTableWidgetItem()
+            w_pct.setData(Qt.EditRole, float(f"{pct:.2f}"))
+            
+            self.ability_table.setItem(row, 0, w_abi)
+            self.ability_table.setItem(row, 1, w_pct)
+            row += 1
+            
+        self.ability_table.setSortingEnabled(True)
+        self.ability_table.sortItems(1, Qt.DescendingOrder)
+        
+        if self.selected_ability:
+            for i in range(self.ability_table.rowCount()):
+                if self.ability_table.item(i, 0).text() == self.selected_ability:
+                    self.ability_table.selectRow(i)
+                    break
+        self.ability_table.blockSignals(False)
+
     def update_moves_table(self):
         self.moves_table.blockSignals(True)
         self.moves_table.setSortingEnabled(False)
@@ -793,6 +953,7 @@ class MetaStatsWidget(QWidget):
         filters_str = []
         if self.selected_nature: filters_str.append(f"Nat: {self.selected_nature}")
         if self.selected_item: filters_str.append(f"Strum: {self.selected_item}")
+        if self.selected_ability: filters_str.append(f"Abilità: {self.selected_ability}")
         
         if filters_str:
             self.moves_label.setText(f"Mosse per {self.selected_pokemon} ({', '.join(filters_str)})")
@@ -802,19 +963,23 @@ class MetaStatsWidget(QWidget):
         moves_count = {}
         total = 0
         
-        for name, trainer_id, winner_id, nature, item_name, moves in self.current_format_builds:
+        for name, trainer_id, winner_id, nature, item_name, ability_name, moves in self.current_format_builds:
             if name == self.selected_pokemon:
                 nat = nature if nature else "Sconosciuta"
                 itm = item_name if item_name else "Nessuno"
+                abi = ability_name if ability_name else "Sconosciuta"
                 
                 if self.selected_nature and nat != self.selected_nature:
                     continue
                 if self.selected_item and itm != self.selected_item:
                     continue
+                if self.selected_ability and abi != self.selected_ability:
+                    continue
                     
                 total += 1
                 if moves:
-                    for mv in moves.split(','):
+                    mov_list = moves if isinstance(moves, list) else (moves.split(',') if moves else [])
+                    for mv in mov_list:
                         mv = mv.strip()
                         if mv:
                             moves_count[mv] = moves_count.get(mv, 0) + 1
@@ -884,12 +1049,12 @@ class MetaStatsWidget(QWidget):
             set_yellow = QBarSet("Neutra (Max EVs) -> Favorevole (Max EVs)")
             set_yellow.setColor(QColor("#C2BFBC")) 
             
-            species_list.sort(key=lambda x: x.base_stats.get(stat_key, 0))
+            species_list.sort(key=lambda x: getattr(x, f"bst_{stat_key}", 0))
             
             max_y_value = 0
             
             for pkmn in species_list:
-                base = pkmn.base_stats.get(stat_key, 0)
+                base = getattr(pkmn, f"bst_{stat_key}", 0)
                 categories.append(pkmn.name)
                 
                 if is_hp:
@@ -1211,7 +1376,7 @@ class MetaStatsWidget(QWidget):
             item = self.roster_list.item(i)
             if item.checkState() == Qt.Checked:
                 sp = item.data(Qt.UserRole)
-                base = sp.base_stats.get(stat_key, 0)
+                base = getattr(sp, f"bst_{stat_key}", 0)
                 
                 if is_hp:
                     max_stat = math.floor((2 * base + 31 + math.floor(252 / 4)) * 50 / 100) + 50 + 10

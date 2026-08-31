@@ -1,0 +1,44 @@
+{
+  "vgc_reg_g": [
+    {
+      "name": "Flutter Mane",
+      "options": {
+        "item": "Booster Energy",
+        "nature": "Timid",
+        "evs": {"hp": 116, "def": 188, "spa": 36, "spd": 4, "spe": 164},
+        "teraType": "Fairy"
+      },
+      "common_moves": ["Moonblast", "Shadow Ball", "Dazzling Gleam"]
+    },
+    {
+      "name": "Ogerpon-Wellspring",
+      "options": {
+        "item": "Wellspring Mask",
+        "nature": "Adamant",
+        "evs": {"hp": 252, "atk": 76, "def": 100, "spd": 4, "spe": 76},
+        "teraType": "Water"
+      },
+      "common_moves": ["Ivy Cudgel", "Horn Leech", "Wood Hammer"]
+    },
+    {
+      "name": "Urshifu-Rapid-Strike",
+      "options": {
+        "item": "Mystic Water",
+        "nature": "Adamant",
+        "evs": {"hp": 44, "atk": 252, "def": 4, "spd": 12, "spe": 196},
+        "teraType": "Water"
+      },
+      "common_moves": ["Surging Strikes", "Aqua Jet", "Close Combat"]
+    },
+    {
+      "name": "Incineroar",
+      "options": {
+        "item": "Sitrus Berry",
+        "nature": "Careful",
+        "evs": {"hp": 252, "atk": 4, "def": 76, "spd": 172, "spe": 4},
+        "teraType": "Grass"
+      },
+      "common_moves": ["Knock Off", "Flare Blitz", "Parting Shot", "Fake Out"]
+    }
+  ]
+}

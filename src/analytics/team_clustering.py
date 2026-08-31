@@ -1,29 +1,24 @@
 import json
 from typing import List, Dict, Any, Set
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, selectinload
 from database.connection import SessionLocal
-from database.models import Match, MatchTeam, TeamVariant, PokemonSet, Turn, TurnAction
+from database.models_v2 import MatchV2, MatchTeamV2, TeamVariantV2, TeamVariantBuild, PokemonBuild, TurnV2, TurnActionV2
 
 def get_team_archetypes_and_groupings(max_distance: int = 2, format_filter: str = "Tutti", trainer_filter: str = "") -> list:
     session = SessionLocal()
     
-    query = session.query(MatchTeam).join(Match).options(
-        joinedload(MatchTeam.match).joinedload(Match.turns).joinedload(Turn.actions),
-        joinedload(MatchTeam.match).joinedload(Match.teams)
+    query = session.query(MatchTeamV2).join(MatchV2).options(
+        joinedload(MatchTeamV2.match).joinedload(MatchV2.turns).joinedload(TurnV2.actions),
+        joinedload(MatchTeamV2.match).joinedload(MatchV2.teams),
+        joinedload(MatchTeamV2.variant).joinedload(TeamVariantV2.builds).joinedload(TeamVariantBuild.build)
     )
     
     if format_filter and format_filter != "Tutti":
-        query = query.filter(Match.format == format_filter)
+        query = query.filter(MatchV2.format == format_filter)
     if trainer_filter:
-        query = query.filter(MatchTeam.trainer_id.ilike(f"%{trainer_filter}%"))
+        query = query.filter(MatchTeamV2.trainer_id.ilike(f"%{trainer_filter}%"))
         
     teams = query.all()
-    
-    all_sets = session.query(PokemonSet).all()
-    set_species_map = {s.id: s.species_id for s in all_sets}
-    
-    all_variants = session.query(TeamVariant).all()
-    variant_species_map = {}
     
     def normalize_species(sp: str) -> str:
         if not sp: return ""
@@ -35,13 +30,6 @@ def get_team_archetypes_and_groupings(max_distance: int = 2, format_filter: str 
         if sp.endswith("mega"): return sp[:-4]
         return sp
         
-    for v in all_variants:
-        sp_set = set()
-        for sid in v.pokemon_set_ids:
-            if sid in set_species_map:
-                sp_set.add(normalize_species(set_species_map[sid]))
-        variant_species_map[v.id] = frozenset(sp_set)
-    
     processed_teams = []
     
     for team in teams:
@@ -50,7 +38,13 @@ def get_team_archetypes_and_groupings(max_distance: int = 2, format_filter: str 
         N = len(match.turns)
         if N == 0: continue
         
-        species_ids = variant_species_map.get(team.team_variant_id, frozenset())
+        species_ids = set()
+        if team.variant and team.variant.builds:
+            for tvb in team.variant.builds:
+                if tvb.build and tvb.build.species_id:
+                    species_ids.add(normalize_species(tvb.build.species_id))
+        species_ids = frozenset(species_ids)
+        
         is_winner = 1 if match.winner_id == team.trainer_id else 0
         
         p1_name = "P1"

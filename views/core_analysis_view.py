@@ -8,7 +8,7 @@ from PySide6.QtGui import QPixmap, QIcon, QColor
 from PySide6.QtCore import Qt, QThread, Signal
 
 from database.connection import SessionLocal
-from database.models import Match
+from database.models_v2 import MatchV2
 from database.core_repository import MetaAnalysisRepository
 from src.domain.core_models import PokemonUsageStats, BuildDetails, CoreTeammates, CoreCombo
 
@@ -36,20 +36,7 @@ class CoreAnalysisWorker(QThread):
             self.error.emit(str(e))
 
 
-def get_pokemon_icon_path(pokemon_name: str) -> str:
-    base_path = r"C:\Users\Mirco\Documents\Jorkcorp\janalytics_windows\assets\icons"
-    clean_name = pokemon_name.lower().replace(" ", "").replace("-", "")
-    path = os.path.join(base_path, f"{clean_name}.png")
-    if os.path.exists(path):
-        return path
-    
-    # Try handling suffixes
-    for base in ["ogerpon", "urshifu", "calyrex", "rotom", "tauros"]:
-        if clean_name.startswith(base):
-            path = os.path.join(base_path, f"{base}.png")
-            if os.path.exists(path): return path
-            
-    return None
+from src.utils.icon_utils import get_pokemon_icon_path
 
 TYPE_COLORS = {
     "Normal": "#A8A77A", "Fire": "#EE8130", "Water": "#6390F0", "Electric": "#F7D02C",
@@ -256,10 +243,20 @@ class GlobalMetaWidget(QWidget):
         
         self.load_formats()
         
+    def showEvent(self, event):
+        super().showEvent(event)
+        # Salva il formato corrente se c'è
+        curr = self.format_combo.currentText()
+        self.load_formats()
+        if curr:
+            idx = self.format_combo.findText(curr)
+            if idx >= 0:
+                self.format_combo.setCurrentIndex(idx)
+        
     def load_formats(self):
         session = SessionLocal()
         try:
-            formats = session.query(Match.format).distinct().all()
+            formats = session.query(MatchV2.format).distinct().all()
             self.format_combo.clear()
             for (f,) in formats:
                 if f:
@@ -295,7 +292,7 @@ class GlobalMetaWidget(QWidget):
         
         self.table.setRowCount(len(stats))
         for row, s in enumerate(stats):
-            w_name = QTableWidgetItem(s.species_id.capitalize())
+            w_name = QTableWidgetItem(s.species_id.capitalize() if s.species_id else "Sconosciuto")
             
             w_usage = QTableWidgetItem()
             w_usage.setData(Qt.EditRole, float(f"{s.usage_percent:.1f}"))

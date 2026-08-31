@@ -4,10 +4,11 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QComboBox, QSpinBox, QSlider, QScrollArea, QGridLayout,
     QCompleter, QFrame, QFormLayout, QMessageBox, QToolTip, QDialog,
-    QStackedWidget, QLineEdit
+    QStackedWidget, QLineEdit, QTableWidget, QTableWidgetItem, QHeaderView,
+    QApplication
 )
-from PySide6.QtCore import Qt, Signal, QSize
-from PySide6.QtGui import QColor, QFont, QPixmap, QPainter
+from PySide6.QtCore import Qt, Signal, QSize, QThread
+from PySide6.QtGui import QColor, QFont, QPixmap, QPainter, QIcon
 from PySide6.QtCharts import (
     QChart, QChartView, QBarSet, QStackedBarSeries, QBarCategoryAxis,
     QValueAxis, QLineSeries
@@ -20,7 +21,12 @@ from src.domain.team_builder_service import (
     get_legal_abilities_details, get_all_items_details
 )
 from database.connection import SessionLocal
-from database.models import Match, PokemonSet, PokemonSpecies, MatchTeam, TeamVariant
+from database.models_v2 import MatchV2, PokemonSpeciesV2, MatchTeamV2, TeamVariantV2, PokemonBuild, TeamVariantBuild
+
+from domain.batch_analyzer import BatchDamageAnalyzer, PokemonOptions, FieldOptions
+from domain.smogon_calc import SmogonDamageCalc
+from src.domain.batch_generator_service import BatchGeneratorService
+from src.utils.icon_utils import get_pokemon_icon_path
 
 class CustomSliderLayout(QWidget):
     valueChanged = Signal(str, int)
@@ -143,8 +149,16 @@ class PokemonEditPage(QWidget):
         
         self.combo_nature = QComboBox()
         self.combo_nature.setEditable(True)
-        natures = ["Hardy", "Lonely", "Brave", "Adamant", "Naughty", "Bold", "Docile", "Relaxed", "Impish", "Lax", "Timid", "Hasty", "Serious", "Jolly", "Naive", "Modest", "Mild", "Quiet", "Bashful", "Rash", "Calm", "Gentle", "Sassy", "Careful", "Quirky"]
-        self.combo_nature.addItems(natures)
+        NATURES_MAP = {
+            "Adamant": "(+Atk, -SpA)", "Modest": "(+SpA, -Atk)", "Jolly": "(+Spe, -SpA)", "Timid": "(+Spe, -Atk)",
+            "Brave": "(+Atk, -Spe)", "Quiet": "(+SpA, -Spe)", "Relaxed": "(+Def, -Spe)", "Sassy": "(+SpD, -Spe)",
+            "Impish": "(+Def, -SpA)", "Careful": "(+SpD, -SpA)", "Bold": "(+Def, -Atk)", "Calm": "(+SpD, -Atk)",
+            "Naughty": "(+Atk, -SpD)", "Rash": "(+SpA, -SpD)", "Naive": "(+Spe, -SpD)", "Hasty": "(+Spe, -Def)",
+            "Lonely": "(+Atk, -Def)", "Mild": "(+SpA, -Def)", "Lax": "(+Def, -SpD)", "Gentle": "(+SpD, -Def)",
+            "Hardy": "(Neutral)", "Docile": "(Neutral)", "Serious": "(Neutral)", "Bashful": "(Neutral)", "Quirky": "(Neutral)"
+        }
+        for nat, desc in NATURES_MAP.items():
+            self.combo_nature.addItem(f"{nat} {desc}", userData=nat)
         self.combo_nature.currentTextChanged.connect(self._update_stats_calc)
         form.addRow("Natura:", self.combo_nature)
         
@@ -219,9 +233,74 @@ class PokemonEditPage(QWidget):
         scroll_right.setWidgetResizable(True)
         scroll_right.setStyleSheet("QScrollArea { border: none; }")
         
+        scroll_content = QWidget()
+        scroll_layout = QVBoxLayout(scroll_content)
+        
         self.chart_container = QWidget()
         self.chart_layout = QGridLayout(self.chart_container)
-        scroll_right.setWidget(self.chart_container)
+        scroll_layout.addWidget(self.chart_container)
+        
+        # --- SEZIONE DAMAGE CALC (OPZIONE 2) ---
+        calc_widget = QFrame()
+        calc_widget.setStyleSheet(f"background-color: {Palette.BG_SURFACE_ELEVATED}; border-radius: 8px; margin-top: 10px;")
+        calc_layout = QVBoxLayout(calc_widget)
+        
+        lbl_calc = QLabel("🎯 Damage Calculator Rapido (Testa le mosse equipaggiate sul Meta)")
+        lbl_calc.setStyleSheet(f"font-size: 14px; font-weight: bold; color: {Palette.PRIMARY}; margin-bottom: 5px;")
+        calc_layout.addWidget(lbl_calc)
+        
+        # Bottoni delle 4 mosse
+        self.calc_move_buttons_layout = QHBoxLayout()
+        self.calc_move_btns = []
+        for i in range(4):
+            btn = QPushButton("Slot Vuoto")
+            btn.setStyleSheet(f"background-color: {Palette.BG_CARD}; color: {Palette.TEXT_PRIMARY}; padding: 8px; border-radius: 4px; border: 1px solid {Palette.BORDER_COLOR};")
+            btn.setEnabled(False)
+            btn.clicked.connect(lambda checked, idx=i: self._run_main_damage_calc(idx))
+            self.calc_move_btns.append(btn)
+            self.calc_move_buttons_layout.addWidget(btn)
+            
+        calc_layout.addLayout(self.calc_move_buttons_layout)
+        
+        # Filtri e Tabella
+        calc_filters = QHBoxLayout()
+        self.search_calc_pokemon = QLineEdit()
+        self.search_calc_pokemon.setPlaceholderText("Filtra per nome...")
+        self.search_calc_pokemon.textChanged.connect(self._filter_calc_table)
+        self.filter_calc_type = QComboBox()
+        self.filter_calc_type.addItems(["Tutti i Tipi", "Normal", "Fire", "Water", "Electric", "Grass", "Ice", "Fighting", "Poison", "Ground", "Flying", "Psychic", "Bug", "Rock", "Ghost", "Dragon", "Dark", "Steel", "Fairy"])
+        self.filter_calc_type.currentTextChanged.connect(self._filter_calc_table)
+        calc_filters.addWidget(self.search_calc_pokemon)
+        calc_filters.addWidget(self.filter_calc_type)
+        calc_layout.addLayout(calc_filters)
+        
+        self.calc_table = QTableWidget()
+        self.calc_table.setColumnCount(3)
+        self.calc_table.setHorizontalHeaderLabels(["Pokemon", "Max Def", "Min Def"])
+        self.calc_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.calc_table.verticalHeader().setVisible(False)
+        self.calc_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.calc_table.setMinimumHeight(200)
+        self.calc_table.setStyleSheet(f"""
+            QTableWidget {{
+                background-color: {Palette.BG_SURFACE};
+                color: {Palette.TEXT_PRIMARY};
+                border: 1px solid {Palette.BORDER_COLOR};
+                gridline-color: {Palette.BORDER_COLOR};
+            }}
+            QHeaderView::section {{
+                background-color: {Palette.BG_CARD};
+                color: {Palette.TEXT_PRIMARY};
+                padding: 4px;
+                border: 1px solid {Palette.BORDER_COLOR};
+                font-weight: bold;
+            }}
+        """)
+        calc_layout.addWidget(self.calc_table)
+        
+        scroll_layout.addWidget(calc_widget)
+        
+        scroll_right.setWidget(scroll_content)
         
         self.right_stack.addWidget(scroll_right)
         
@@ -265,6 +344,9 @@ class PokemonEditPage(QWidget):
         scroll_moves.setWidget(self.moves_list_widget)
         moves_main_layout.addWidget(scroll_moves)
         self.right_stack.addWidget(self.moves_container_widget)
+        
+        self.current_calc_data = []
+
         
         # Page 2: Ability Selection
         self.ability_container_widget = QWidget()
@@ -340,7 +422,7 @@ class PokemonEditPage(QWidget):
         
     def _populate_formats(self):
         with SessionLocal() as session:
-            formats = session.query(Match.format).distinct().all()
+            formats = session.query(MatchV2.format).distinct().all()
             for f in formats:
                 if f[0]:
                     self.format_combo.addItem(f[0])
@@ -353,8 +435,16 @@ class PokemonEditPage(QWidget):
         self.combo_species.setCurrentText(member.species)
         self.combo_species.blockSignals(False)
         
+        self.combo_species.blockSignals(False)
+        
         if member.item: self.btn_item.setText(member.item)
-        if member.nature: self.combo_nature.setCurrentText(member.nature)
+        if member.nature:
+            # Trova l'indice della natura per impostare il testo con i bonus
+            idx = self.combo_nature.findData(member.nature)
+            if idx >= 0:
+                self.combo_nature.setCurrentIndex(idx)
+            else:
+                self.combo_nature.setCurrentText(member.nature)
         
         self._on_species_changed(member.species)
         
@@ -380,6 +470,7 @@ class PokemonEditPage(QWidget):
                 
         self._update_stats_calc()
         self._build_charts()
+        self._update_calc_buttons()
 
     def _toggle_champions_mode(self, init_load=False):
         is_champ = self.btn_champions.isChecked()
@@ -417,9 +508,12 @@ class PokemonEditPage(QWidget):
     def _on_species_changed(self, species_name: str):
         if not species_name: return
         with SessionLocal() as session:
-            db_pkmn = session.query(PokemonSpecies).filter(PokemonSpecies.name == species_name).first()
+            db_pkmn = session.query(PokemonSpeciesV2).filter(PokemonSpeciesV2.name == species_name).first()
             if db_pkmn:
-                self.base_stats = db_pkmn.base_stats
+                self.base_stats = {
+                    "hp": db_pkmn.bst_hp, "atk": db_pkmn.bst_atk, "def": db_pkmn.bst_def,
+                    "spa": db_pkmn.bst_spa, "spd": db_pkmn.bst_spd, "spe": db_pkmn.bst_spe
+                }
             else:
                 self.base_stats = {"hp": 100, "atk": 100, "def": 100, "spa": 100, "spd": 100, "spe": 100}
         
@@ -494,7 +588,8 @@ class PokemonEditPage(QWidget):
 
     def _update_stats_calc(self, *_):
         if not self.base_stats: return
-        nature = self.combo_nature.currentText()
+        nature_full = self.combo_nature.currentText()
+        nature = self.combo_nature.currentData() or nature_full.split()[0] if nature_full else "Hardy"
         is_champ = self.btn_champions.isChecked()
         
         self.calculated_stats = {}
@@ -573,30 +668,28 @@ class PokemonEditPage(QWidget):
         }
         
         with SessionLocal() as session:
-            match_teams = session.query(MatchTeam).join(Match, MatchTeam.match_id == Match.id)\
-                .filter(Match.format == fmt).all()
+            match_teams = session.query(MatchTeamV2).join(MatchV2, MatchTeamV2.match_id == MatchV2.id)\
+                .filter(MatchV2.format == fmt).all()
             
             variant_ids_list = list(set([mt.team_variant_id for mt in match_teams if mt.team_variant_id]))
-            variants = []
             chunk_size = 500
+            
+            build_ids = set()
             for i in range(0, len(variant_ids_list), chunk_size):
                 chunk = variant_ids_list[i:i+chunk_size]
                 if chunk:
-                    variants.extend(session.query(TeamVariant).filter(TeamVariant.id.in_(chunk)).all())
-            
-            set_ids = set()
-            for v in variants:
-                if v.pokemon_set_ids:
-                    for sid in v.pokemon_set_ids:
-                        set_ids.add(sid)
+                    tvbs = session.query(TeamVariantBuild).filter(TeamVariantBuild.team_variant_id.in_(chunk)).all()
+                    for tvb in tvbs:
+                        if tvb.build_id:
+                            build_ids.add(tvb.build_id)
             
             meta_species_set = set()
-            set_ids_list = list(set_ids)
-            for i in range(0, len(set_ids_list), chunk_size):
-                chunk = set_ids_list[i:i+chunk_size]
+            build_ids_list = list(build_ids)
+            for i in range(0, len(build_ids_list), chunk_size):
+                chunk = build_ids_list[i:i+chunk_size]
                 if chunk:
-                    chunk_species = session.query(PokemonSpecies).join(PokemonSet, PokemonSet.species_id == PokemonSpecies.id)\
-                        .filter(PokemonSet.id.in_(chunk)).distinct().all()
+                    chunk_species = session.query(PokemonSpeciesV2).join(PokemonBuild, PokemonBuild.species_id == PokemonSpeciesV2.id)\
+                        .filter(PokemonBuild.id.in_(chunk)).distinct().all()
                     meta_species_set.update(chunk_species)
                     
             meta_species = list(meta_species_set)
@@ -629,13 +722,13 @@ class PokemonEditPage(QWidget):
                 set_yellow = QBarSet("Max -> Favorevole")
                 set_yellow.setColor(QColor("#C2BFBC"))
                 
-                meta_species_sorted = sorted(meta_species, key=lambda x: x.base_stats.get(meta_stat.lower(), 0))
+                meta_species_sorted = sorted(meta_species, key=lambda x: getattr(x, f"bst_{meta_stat.lower()}", 0))
                 categories = []
                 max_y = 0
                 
                 import math
                 for pkmn in meta_species_sorted:
-                    base = pkmn.base_stats.get(meta_stat.lower(), 100)
+                    base = getattr(pkmn, f"bst_{meta_stat.lower()}", 100)
                     categories.append(pkmn.name)
                     
                     if is_hp:
@@ -989,17 +1082,17 @@ class PokemonEditPage(QWidget):
             card_layout.addWidget(desc_lbl)
             
             tags_layout = QHBoxLayout()
-            if mv["priority"] != 0:
+            if mv.get("priority", 0) != 0:
                 prio_lbl = QLabel(f"Priority: {mv['priority']:+d}")
                 prio_lbl.setStyleSheet("background-color: #C49A3C; color: black; padding: 2px 4px; border-radius: 3px; font-size: 10px; font-weight: bold;")
                 tags_layout.addWidget(prio_lbl)
                 
-            if mv["flags"].get("contact"):
+            if mv.get("flags", {}).get("contact"):
                 cont_lbl = QLabel("Contact")
                 cont_lbl.setStyleSheet("background-color: #8A3838; color: white; padding: 2px 4px; border-radius: 3px; font-size: 10px;")
                 tags_layout.addWidget(cont_lbl)
                 
-            if mv["boosts"]:
+            if mv.get("boosts"):
                 b_text = ", ".join([f"{k} {v:+d}" for k, v in mv["boosts"].items()])
                 b_lbl = QLabel(f"Boosts: {b_text}")
                 b_lbl.setStyleSheet("background-color: #3D7A5A; color: white; padding: 2px 4px; border-radius: 3px; font-size: 10px;")
@@ -1028,14 +1121,126 @@ class PokemonEditPage(QWidget):
         self.member.moves_data[self.current_move_slot] = move_data
         
         self.right_stack.setCurrentIndex(0)
+        self._update_calc_buttons()
 
-    def save_and_exit(self):
+    def _update_calc_buttons(self):
+        for i, btn in enumerate(self.calc_move_btns):
+            m = self.move_buttons[i].text()
+            if m and m != "Nessuna Mossa":
+                btn.setText(f"Calcola: {m}")
+                btn.setEnabled(True)
+                btn.setStyleSheet(f"background-color: {Palette.SECONDARY}; color: {Palette.BG_APP}; padding: 8px; border-radius: 4px; font-weight: bold;")
+            else:
+                btn.setText("Slot Vuoto")
+                btn.setEnabled(False)
+                btn.setStyleSheet(f"background-color: {Palette.BG_CARD}; color: {Palette.TEXT_MUTED}; padding: 8px; border-radius: 4px; border: 1px solid {Palette.BORDER_COLOR};")
+
+    def _run_main_damage_calc(self, move_slot_idx: int):
+        move_name = self.move_buttons[move_slot_idx].text()
+        if not move_name or move_name == "Nessuna Mossa": return
+        
+        # Reset selection style
+        for i, btn in enumerate(self.calc_move_btns):
+            if btn.isEnabled():
+                if i == move_slot_idx:
+                    btn.setStyleSheet(f"background-color: {Palette.PRIMARY}; color: {Palette.BG_APP}; padding: 8px; border-radius: 4px; font-weight: bold; border: 2px solid white;")
+                else:
+                    btn.setStyleSheet(f"background-color: {Palette.SECONDARY}; color: {Palette.BG_APP}; padding: 8px; border-radius: 4px; font-weight: bold;")
+
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            self._run_damage_calc(move_name)
+        except Exception as e:
+            QMessageBox.critical(self, "Errore Calcolo Danni", str(e))
+        finally:
+            QApplication.restoreOverrideCursor()
+
+    def _run_damage_calc(self, move_name: str):
+        # 1. Costruisci le options dell'attaccante corrente
+        self.save_and_exit(emit_signals=False) # Forza aggiornamento self.member
+        attacker_opts = PokemonOptions(
+            item=self.member.item,
+            nature=self.member.nature,
+            evs=self.member.evs,
+            ivs=self.member.ivs,
+            ability=self.member.ability
+        )
+        
+        # 2. Ottieni Meta Threats
+        current_format = self.format_combo.currentText() or "VGC 2024 Reg H"
+        meta_threats = BatchGeneratorService.generate_threats_from_format(current_format, 15.0)
+        
+        # 3. Analisi Singola Mossa
+        analyzer = BatchDamageAnalyzer(SmogonDamageCalc())
+        results = analyzer.analyze_single_move_vs_meta(self.member.species, attacker_opts, move_name, meta_threats)
+        
+        # Salva risultati e popola tabella
+        self.current_calc_data = results
+        self._populate_calc_table()
+
+    def _populate_calc_table(self):
+        self.calc_table.setRowCount(0)
+        if not self.current_calc_data: return
+        
+        for row_data in self.current_calc_data:
+            row = self.calc_table.rowCount()
+            self.calc_table.insertRow(row)
+            
+            pkm = row_data["name"]
+            max_d = row_data["max_def"]
+            min_d = row_data["min_def"]
+            
+            pkm_item = QTableWidgetItem(pkm)
+            icon_path = get_pokemon_icon_path(pkm)
+            if icon_path and os.path.exists(icon_path):
+                pkm_item.setIcon(QIcon(icon_path))
+                
+            max_item = QTableWidgetItem(f"{max_d:.1f}%")
+            max_item.setForeground(QColor("#cc0000" if max_d >= 100 else Palette.TEXT_PRIMARY))
+            
+            min_item = QTableWidgetItem(f"{min_d:.1f}%")
+            min_item.setForeground(QColor("#cc0000" if min_d >= 100 else Palette.TEXT_PRIMARY))
+            
+            # Nascondi riga per default (sarà il filtro a mostrarla)
+            pkm_item.setData(Qt.UserRole, get_species_types(pkm)) # Salva i tipi per il filtro
+            
+            self.calc_table.setItem(row, 0, pkm_item)
+            self.calc_table.setItem(row, 1, max_item)
+            self.calc_table.setItem(row, 2, min_item)
+            
+        self._filter_calc_table()
+
+    def _filter_calc_table(self):
+        search_text = self.search_calc_pokemon.text().lower()
+        filter_type = self.filter_calc_type.currentText()
+        
+        for row in range(self.calc_table.rowCount()):
+            pkm_item = self.calc_table.item(row, 0)
+            if not pkm_item: continue
+            
+            pkm_name = pkm_item.text()
+            pkm_types = pkm_item.data(Qt.UserRole) or []
+            
+            match_name = search_text in pkm_name.lower()
+            match_type = filter_type == "Tutti i Tipi" or filter_type in pkm_types
+            
+            self.calc_table.setRowHidden(row, not (match_name and match_type))
+
+
+
+    def save_and_exit(self, emit_signals=True):
         if not self.member: return
         self.member.species = self.combo_species.currentText()
         self.member.types = get_species_types(self.member.species)
-        self.member.ability = self.combo_ability.currentText()
-        self.member.item = self.combo_item.currentText()
-        self.member.nature = self.combo_nature.currentText()
+        
+        ab_text = self.btn_ability.text()
+        self.member.ability = ab_text if ab_text != "Seleziona Abilità" else ""
+        
+        it_text = self.btn_item.text()
+        self.member.item = it_text if it_text != "Seleziona Strumento" else ""
+        
+        nat_full = self.combo_nature.currentText()
+        self.member.nature = self.combo_nature.currentData() or (nat_full.split()[0] if nat_full else "Hardy")
         
         new_moves = []
         for btn in self.move_buttons:
@@ -1049,5 +1254,6 @@ class PokemonEditPage(QWidget):
             self.member.evs[stat] = self.ev_sliders[stat].value()
             self.member.ivs[stat] = self.iv_spins[stat].value()
             
-        self.pokemon_updated.emit()
-        self.go_back.emit()
+        if emit_signals:
+            self.pokemon_updated.emit()
+            self.go_back.emit()

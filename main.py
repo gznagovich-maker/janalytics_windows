@@ -32,6 +32,8 @@ from views.variant_builds_view import VariantBuildsWidget
 from views.limitless_views import LimitlessTournamentsWidget, LimitlessTournamentDetailWidget
 from views.home_view import HomeWidget
 from views.build_and_compare_view import BuildAndCompareWidget
+from views.team_optimizer_view import TeamOptimizerView
+from views.bulk_optimizer_view import BulkOptimizerView
 from widgets.loading_overlay import LoadingOverlay
 
 
@@ -299,13 +301,19 @@ class MainWindow(QMainWindow):
             "resources/icons/puzzle-piece.svg",
             "resources/icons/puzzle-piece-hover.svg"
         )
+        
+        self.btn_nav_optimizer = AnimatedMenuButton(" Ottimizzazione Team")
+        self.btn_nav_optimizer.setIcons(
+            "resources/icons/sparkles.svg",
+            "resources/icons/sparkles-hover.svg"
+        )
+        self.btn_nav_optimizer.clicked.connect(self.show_team_optimizer)
 
 
-        # Rendiamo i bottoni checkable per simulare le tab
         self.nav_buttons = [
             self.btn_nav_list, self.btn_nav_import, self.btn_nav_mass_import, 
             self.btn_nav_meta_stats, self.btn_nav_core_analysis, 
-            self.btn_nav_team_analysis, self.btn_nav_limitless, self.btn_nav_build_compare
+            self.btn_nav_team_analysis, self.btn_nav_limitless, self.btn_nav_build_compare, self.btn_nav_optimizer
         ]
         for btn in self.nav_buttons:
             btn.setCheckable(True)
@@ -325,8 +333,8 @@ class MainWindow(QMainWindow):
         body_layout.addWidget(self.sidebar)
 
         # StackedWidget per le diverse schermate (nel Body a destra)
-        self.stacked_widget = QStackedWidget()
-        body_layout.addWidget(self.stacked_widget)
+        self.stack = QStackedWidget()
+        body_layout.addWidget(self.stack)
         
         main_layout.addWidget(self.body_widget)
         
@@ -342,6 +350,8 @@ class MainWindow(QMainWindow):
         self.home_view.navigate_to_core_analysis.connect(self.show_core_analysis)
         self.home_view.navigate_to_team_analysis.connect(self.show_team_analysis)
         self.home_view.navigate_to_build_compare.connect(self.show_build_compare)
+        self.home_view.navigate_to_optimizer.connect(self.show_team_optimizer)
+        self.home_view.navigate_to_bulk_optimizer.connect(self.show_bulk_optimizer)
 
         self.import_view = ImportWidget(self)
         self.list_view = ReplayListWidget()
@@ -359,6 +369,7 @@ class MainWindow(QMainWindow):
         self.limitless_tournaments_view = LimitlessTournamentsWidget(self)
         self.limitless_detail_view = LimitlessTournamentDetailWidget(self)
         self.build_compare_view = BuildAndCompareWidget()
+        self.team_optimizer_view = TeamOptimizerView(self)
         
         # Connetti segnali build
         self.team_analysis_view.show_builds_signal.connect(self.show_variant_builds)
@@ -368,23 +379,24 @@ class MainWindow(QMainWindow):
         # Storico per navigazione
         self.previous_page_index = 1
 
-        self.stacked_widget.addWidget(self.import_view)  # Indice 0
-        self.stacked_widget.addWidget(self.list_view)  # Indice 1
-        self.stacked_widget.addWidget(self.detail_view)  # Indice 2
-        self.stacked_widget.addWidget(self.pokedex_view) # Indice 3
-        self.stacked_widget.addWidget(self.moves_view)   # Indice 4
-        self.stacked_widget.addWidget(self.items_view)   # Indice 5
-        self.stacked_widget.addWidget(self.abilities_view)# Indice 6
-        self.stacked_widget.addWidget(self.move_detail_view) # Indice 7
-        self.stacked_widget.addWidget(self.meta_stats_view) # Indice 8
-        self.stacked_widget.addWidget(self.mass_import_view) # Indice 9
-        self.stacked_widget.addWidget(self.core_analysis_view) # Indice 10
-        self.stacked_widget.addWidget(self.team_analysis_view) # Indice 11
-        self.stacked_widget.addWidget(self.variant_builds_view) # Indice 12
-        self.stacked_widget.addWidget(self.limitless_tournaments_view) # Indice 13
-        self.stacked_widget.addWidget(self.limitless_detail_view) # Indice 14
-        self.stacked_widget.addWidget(self.build_compare_view) # Indice 15
-        self.stacked_widget.addWidget(self.home_view) # Indice 16
+        self.stack.addWidget(self.import_view)
+        self.stack.addWidget(self.list_view)
+        self.stack.addWidget(self.detail_view)
+        self.stack.addWidget(self.pokedex_view)
+        self.stack.addWidget(self.moves_view)
+        self.stack.addWidget(self.items_view)
+        self.stack.addWidget(self.abilities_view)
+        self.stack.addWidget(self.move_detail_view)
+        self.stack.addWidget(self.meta_stats_view)
+        self.stack.addWidget(self.mass_import_view)
+        self.stack.addWidget(self.core_analysis_view)
+        self.stack.addWidget(self.team_analysis_view)
+        self.stack.addWidget(self.variant_builds_view)
+        self.stack.addWidget(self.build_compare_view)
+        self.stack.addWidget(self.team_optimizer_view)
+        self.stack.addWidget(self.limitless_tournaments_view)
+        self.stack.addWidget(self.limitless_detail_view)
+        self.stack.addWidget(self.home_view)
 
 
         # Signal connections
@@ -455,7 +467,7 @@ class MainWindow(QMainWindow):
     def show_home_view(self):
         self.update_nav_buttons(None)
         self.lbl_global_title.setText("Home")
-        self.stacked_widget.setCurrentIndex(16)
+        self.stack.setCurrentWidget(self.home_view)
         # Assicura che la sidebar sia chiusa
         SIDEBAR_WIDTH = 232
         if self.sidebar.maximumWidth() >= SIDEBAR_WIDTH:
@@ -464,60 +476,70 @@ class MainWindow(QMainWindow):
     def show_import_view(self):
         self.update_nav_buttons(self.btn_nav_import)
         self.lbl_global_title.setText("Importa Replay")
-        self.stacked_widget.setCurrentIndex(0)
+        self.stack.setCurrentWidget(self.import_view)
 
     def show_mass_import_view(self):
         self.update_nav_buttons(self.btn_nav_mass_import)
         self.lbl_global_title.setText("Importazione Massiva")
-        self.stacked_widget.setCurrentIndex(9)
+        self.stack.setCurrentWidget(self.mass_import_view)
         
     def show_meta_stats(self):
         self.update_nav_buttons(self.btn_nav_meta_stats)
         self.lbl_global_title.setText("Meta Analysis VGC")
-        self.stacked_widget.setCurrentIndex(8)
+        self.stack.setCurrentWidget(self.meta_stats_view)
         
     def show_core_analysis(self):
         self.update_nav_buttons(self.btn_nav_core_analysis)
         self.lbl_global_title.setText("Analisi Core")
-        self.stacked_widget.setCurrentIndex(10)
+        self.stack.setCurrentWidget(self.core_analysis_view)
         
     def show_team_analysis(self):
         self.update_nav_buttons(self.btn_nav_team_analysis)
         self.lbl_global_title.setText("Analisi Team & Archetipi")
-        self.stacked_widget.setCurrentIndex(11)
+        self.stack.setCurrentWidget(self.team_analysis_view)
         
     def show_variant_builds(self, variant):
         self.lbl_global_title.setText("Dettaglio Build Variante")
         self.variant_builds_view.load_variant(variant)
-        self.stacked_widget.setCurrentIndex(12)
+        self.stack.setCurrentWidget(self.variant_builds_view)
 
     def show_list_view(self):
         self.update_nav_buttons(self.btn_nav_list)
         self.lbl_global_title.setText("Libreria Replay VGC")
         self.list_view.load_replays()
-        self.stacked_widget.setCurrentIndex(1)
+        self.stack.setCurrentWidget(self.list_view)
 
     def show_detail_view(self, match_id: str):
         self.update_nav_buttons(None)
         self.lbl_global_title.setText("Dettaglio Match")
         self.detail_view.display_match(match_id)
-        self.stacked_widget.setCurrentIndex(2)
+        self.stack.setCurrentWidget(self.detail_view)
 
     def show_limitless_tournaments(self):
         self.update_nav_buttons(self.btn_nav_limitless)
-        self.lbl_global_title.setText("Tornei Limitless VGC")
-        self.stacked_widget.setCurrentIndex(13)
+        self.lbl_global_title.setText("Risultati Tornei Limitless")
+        self.stack.setCurrentWidget(self.limitless_tournaments_view)
 
     def show_limitless_detail(self, tournament_id: str, tournament_name: str):
         self.update_nav_buttons(None)
-        self.lbl_global_title.setText("Dettaglio Torneo Limitless")
+        self.lbl_global_title.setText(f"Torneo: {tournament_name}")
         self.limitless_detail_view.load_tournament(tournament_id, tournament_name)
-        self.stacked_widget.setCurrentIndex(14)
+        self.stack.setCurrentWidget(self.limitless_detail_view)
 
     def show_build_compare(self):
         self.update_nav_buttons(self.btn_nav_build_compare)
         self.lbl_global_title.setText("Costruisci e Confronta")
-        self.stacked_widget.setCurrentIndex(15)
+        self.stack.setCurrentWidget(self.build_compare_view)
+
+    def show_team_optimizer(self):
+        self.stack.setCurrentWidget(self.team_optimizer_view)
+        self.update_nav_buttons(self.btn_nav_optimizer)
+        self.team_optimizer_view.tabs.setCurrentIndex(0)
+        
+    def show_bulk_optimizer(self):
+        self.stack.setCurrentWidget(self.team_optimizer_view)
+        self.update_nav_buttons(self.btn_nav_optimizer)
+        self.team_optimizer_view.tabs.setCurrentIndex(1)
 
     def handle_variant_import(self, paste_text: str):
         self.build_compare_view.txt_paste.setPlainText(paste_text)

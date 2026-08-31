@@ -84,7 +84,7 @@ class ShowdownParser:
                 
                 if not pkmn.ability and new_pkmn.ability:
                     pkmn.ability = new_pkmn.ability
-                if not pkmn.item and new_pkmn.item:
+                if (not pkmn.item or pkmn.item == 'item') and new_pkmn.item:
                     pkmn.item = new_pkmn.item
                 if not pkmn.tera_type and new_pkmn.tera_type:
                     pkmn.tera_type = new_pkmn.tera_type

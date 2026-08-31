@@ -82,6 +82,8 @@ def main():
         "--name", "Janalytics_Installer",
         "--icon", icon_path,
         "--add-data", f"{app_exe}{os.pathsep}.",
+        "--add-data", f"assets/logo{os.pathsep}assets/logo",
+        "--add-data", f"resources/icons{os.pathsep}resources/icons",
     ]
     
     if db_to_pack:

@@ -12,7 +12,7 @@ from PySide6.QtGui import QDesktopServices, QPixmap, QBrush, QColor, QFont
 from src.analytics.team_clustering import get_team_archetypes_and_groupings
 from src.analytics.archetypes import generate_unrecognized_actions_log
 from database.connection import SessionLocal
-from database.models import Match
+from database.models_v2 import MatchV2
 
 class NumericTableItem(QTableWidgetItem):
     def __init__(self, value, text=""):
@@ -24,10 +24,11 @@ class NumericTableItem(QTableWidgetItem):
             return self.value < other.value
         return super().__lt__(other)
 
+from src.utils.icon_utils import get_pokemon_icon_path
+
 def get_pokemon_pixmap(species: str, size: int = 32) -> QPixmap:
-    # Usiamo assets/icons come richiesto
-    path = os.path.join("assets", "icons", f"{species.lower()}.png")
-    if os.path.exists(path):
+    path = get_pokemon_icon_path(species)
+    if path and os.path.exists(path):
         return QPixmap(path).scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
     return None
 
@@ -98,7 +99,7 @@ class TeamAnalysisWidget(QWidget):
         self.cmb_format = QComboBox()
         self.cmb_format.setFixedWidth(160)
         session = SessionLocal()
-        formats = [f[0] for f in session.query(Match.format).distinct().all() if f[0]]
+        formats = [f[0] for f in session.query(MatchV2.format).distinct().all() if f[0]]
         session.close()
         self.cmb_format.addItems(["Tutti"] + formats)
         

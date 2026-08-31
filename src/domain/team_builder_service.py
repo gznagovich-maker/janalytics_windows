@@ -21,7 +21,10 @@ class TeamMember:
         self.types: List[str] = []
         self.moves_data: List[Dict[str, Any]] = []
 
-def parse_pokepaste(paste_text: str) -> List[TeamMember]:
+def parse_pokepaste(paste_text: str, corrections: Optional[Dict[str, str]] = None) -> List[TeamMember]:
+    if corrections is None:
+        corrections = {}
+        
     members = []
     current_member = None
     
@@ -103,77 +106,108 @@ def parse_pokepaste(paste_text: str) -> List[TeamMember]:
             current_member.is_champions_mode = False
         members.append(current_member)
         
-    # Enrich with DB data
+    from database.models_v2 import PokemonSpeciesV2, MoveV2, AbilityV2, ItemV2
+    from src.domain.exceptions import EntityNotFoundError
+    from database.hash_utils import to_id
+    
+    # Enrich with DB data & Strict Validation
     with SessionLocal() as session:
         for member in members:
-            # Clean species name for query
-            species_clean = member.species.lower().replace('-', '').replace(' ', '').replace('\'', '').replace('.', '')
+            # --- SPECIES ---
+            raw_species = corrections.get(member.species, member.species)
+            species_clean = to_id(raw_species)
             
-            # For exact match first
-            species_db = session.query(PokemonSpecies).filter(PokemonSpecies.id == species_clean).first()
+            species_db = session.query(PokemonSpeciesV2).filter(PokemonSpeciesV2.id == species_clean).first()
             if not species_db:
-                # Try ilike match if exact fails
-                species_db = session.query(PokemonSpecies).filter(PokemonSpecies.id.ilike(f"{species_clean}%")).first()
-                
-            if species_db:
-                member.species = species_db.name
-                member.types = species_db.types
+                raise EntityNotFoundError('species', member.species, member.species)
             
+            member.species = species_db.name
+            types = []
+            if species_db.type1: types.append(species_db.type1)
+            if species_db.type2: types.append(species_db.type2)
+            member.types = types
+            
+            # --- ABILITY ---
+            if member.ability:
+                raw_ability = corrections.get(member.ability, member.ability)
+                ability_clean = to_id(raw_ability)
+                ability_db = session.query(AbilityV2).filter(AbilityV2.id == ability_clean).first()
+                if not ability_db:
+                    raise EntityNotFoundError('ability', member.ability, member.species)
+                member.ability = ability_db.name
+                
+            # --- ITEM ---
+            if member.item:
+                raw_item = corrections.get(member.item, member.item)
+                item_clean = to_id(raw_item)
+                item_db = session.query(ItemV2).filter(ItemV2.id == item_clean).first()
+                if not item_db:
+                    raise EntityNotFoundError('item', member.item, member.species)
+                member.item = item_db.name
+            
+            # --- MOVES ---
             new_moves = []
             for move_name in member.moves:
-                move_clean = move_name.lower().replace('-', '').replace(' ', '').replace("'", "")
-                move_db = session.query(Move).filter(Move.id.ilike(f"{move_clean}%")).first()
-                if move_db:
-                    member.moves_data.append({
-                        "name": move_db.name,
-                        "type": move_db.type,
-                        "category": move_db.category
-                    })
-                    new_moves.append(move_db.name)
-                else:
-                    # Fallback in case move is not found, ensuring 1:1 mapping
-                    member.moves_data.append({
-                        "name": move_name,
-                        "type": "Normal",
-                        "category": "Status"
-                    })
-                    new_moves.append(move_name)
+                raw_move = corrections.get(move_name, move_name)
+                move_clean = to_id(raw_move)
+                
+                # Exception for Hidden Power
+                if move_clean.startswith('hiddenpower'):
+                    move_clean = 'hiddenpower'
+                    
+                move_db = session.query(MoveV2).filter(MoveV2.id == move_clean).first()
+                if not move_db:
+                    raise EntityNotFoundError('move', move_name, member.species)
+                    
+                member.moves_data.append({
+                    "name": move_db.name,
+                    "type": move_db.type,
+                    "category": move_db.category
+                })
+                new_moves.append(move_db.name)
             member.moves = new_moves
                     
     return members
 
 def get_all_species_names() -> List[str]:
+    from database.models_v2 import PokemonSpeciesV2
     with SessionLocal() as session:
-        species = session.query(PokemonSpecies.name).order_by(PokemonSpecies.name).all()
+        species = session.query(PokemonSpeciesV2.name).order_by(PokemonSpeciesV2.name).all()
         return [s[0] for s in species]
 
 def get_species_types(name: str) -> List[str]:
+    from database.models_v2 import PokemonSpeciesV2
     with SessionLocal() as session:
-        species = session.query(PokemonSpecies).filter(PokemonSpecies.name == name).first()
-        return species.types if species else []
+        species = session.query(PokemonSpeciesV2).filter(PokemonSpeciesV2.name == name).first()
+        if not species: return []
+        t = []
+        if species.type1: t.append(species.type1)
+        if species.type2: t.append(species.type2)
+        return t
 
 def get_all_items() -> List[str]:
-    from database.models import Item
+    from database.models_v2 import ItemV2
     with SessionLocal() as session:
-        items = session.query(Item.name).order_by(Item.name).all()
+        items = session.query(ItemV2.name).order_by(ItemV2.name).all()
         return [i[0] for i in items]
 
 def get_all_abilities() -> List[str]:
-    from database.models import Ability
+    from database.models_v2 import AbilityV2
     with SessionLocal() as session:
-        abs_list = session.query(Ability.name).order_by(Ability.name).all()
+        abs_list = session.query(AbilityV2.name).order_by(AbilityV2.name).all()
         return [a[0] for a in abs_list]
 
 def get_all_items_details() -> List[Dict[str, str]]:
-    from database.models import Item
+    from database.models_v2 import ItemV2
     from database.connection import SessionLocal
     with SessionLocal() as session:
-        items = session.query(Item).order_by(Item.name).all()
+        items = session.query(ItemV2).order_by(ItemV2.name).all()
         return [{"name": i.name, "desc": i.short_desc} for i in items]
 
 def get_all_moves() -> List[str]:
+    from database.models_v2 import MoveV2
     with SessionLocal() as session:
-        mvs = session.query(Move.name).order_by(Move.name).all()
+        mvs = session.query(MoveV2.name).order_by(MoveV2.name).all()
         return [m[0] for m in mvs]
 
 def calculate_vgc_stat(base: int, iv: int, ev: int, nature_mult: float, is_hp: bool) -> int:
@@ -186,94 +220,67 @@ def calculate_vgc_stat(base: int, iv: int, ev: int, nature_mult: float, is_hp: b
         return math.floor(stat * nature_mult)
 
 def get_pokeapi_legal_moves_and_abilities(species_name: str) -> Dict[str, List[str]]:
-    """Usa PokeAPI per ottenere le abilità e mosse legali di un Pokemon."""
-    from database.data_integration import PokeDataIntegrator
-    integrator = PokeDataIntegrator()
-    
-    result = {"abilities": [], "moves": []}
-    
-    # Try fetching from pokeapi
-    pkmn_data = integrator.get_pokemon(species_name)
-    if not pkmn_data or 'pokeapi' not in pkmn_data:
-        # Fallback to DB all if missing
-        return result
-        
-    api_id = pkmn_data['pokeapi'].get('id')
-    if not api_id:
-        return result
-        
-    raw_api_data = integrator._fetch_pokeapi('pokemon', str(api_id))
-    if not raw_api_data:
-        return result
-        
-    # Extract abilities
-    for ab in raw_api_data.get('abilities', []):
-        ab_name = ab['ability']['name'].replace('-', ' ').title()
-        if ab_name not in result["abilities"]:
-            result["abilities"].append(ab_name)
-            
-    # Extract moves
-    for mv in raw_api_data.get('moves', []):
-        mv_name = mv['move']['name'].replace('-', ' ').title()
-        if mv_name not in result["moves"]:
-            result["moves"].append(mv_name)
-            
-    return result
+    # Deprecated
+    return {"abilities": [], "moves": []}
 
 def get_legal_moves_details(species_name: str) -> List[Dict[str, Any]]:
-    """Returns a list of move detail dictionaries for a species by combining PokeAPI and Showdown data."""
-    from database.data_integration import PokeDataIntegrator
-    integrator = PokeDataIntegrator()
-    
-    legal_data = get_pokeapi_legal_moves_and_abilities(species_name)
-    legal_moves = legal_data.get("moves", [])
+    import json
+    from database.models_v2 import PokemonSpeciesV2, MoveV2
+    from database.connection import SessionLocal
     
     details_list = []
-    for mv_name in legal_moves:
-        details = integrator.get_showdown_move_details(mv_name)
-        if details:
-            details_list.append({
-                "name": details.get("name", mv_name),
-                "type": details.get("type", "Normal"),
-                "category": details.get("category", "Physical"),
-                "basePower": details.get("basePower", 0),
-                "accuracy": details.get("accuracy", True),
-                "desc": details.get("desc", details.get("shortDesc", "")),
-                "priority": details.get("priority", 0),
-                "flags": details.get("flags", {}),
-                "secondary": details.get("secondary", None),
-                "boosts": details.get("boosts", None),
-                "target": details.get("target", "normal")
-            })
-        else:
-            details_list.append({
-                "name": mv_name,
-                "type": "Normal",
-                "category": "Physical",
-                "basePower": 0,
-                "accuracy": True,
-                "desc": "Nessuna descrizione disponibile.",
-                "priority": 0,
-                "flags": {},
-                "secondary": None,
-                "boosts": None,
-                "target": "normal"
-            })
+    with SessionLocal() as session:
+        pkmn = session.query(PokemonSpeciesV2).filter(PokemonSpeciesV2.name == species_name).first()
+        if not pkmn: return []
+        
+        if not pkmn.learnset_json:
+            return []
             
+        try:
+            move_ids = json.loads(pkmn.learnset_json)
+        except:
+            move_ids = []
+            
+        if move_ids:
+            # Query all these moves
+            moves = session.query(MoveV2).filter(MoveV2.id.in_(move_ids)).all()
+            for mv in moves:
+                details_list.append({
+                    "name": mv.name,
+                    "type": mv.type,
+                    "category": mv.category,
+                    "basePower": mv.base_power,
+                    "accuracy": mv.accuracy,
+                    "desc": mv.short_desc,
+                    "priority": mv.priority,
+                    "target": mv.target,
+                    "flags": {},
+                    "boosts": None,
+                    "secondary": None
+                })
+                
     details_list.sort(key=lambda x: x["name"])
     return details_list
 
 def get_legal_abilities_details(species_name: str) -> List[Dict[str, str]]:
-    legal_data = get_pokeapi_legal_moves_and_abilities(species_name)
-    legal_abilities = legal_data.get("abilities", [])
-    
-    from database.models import Ability
+    import json
+    from database.models_v2 import PokemonSpeciesV2, AbilityV2
     from database.connection import SessionLocal
+    
     with SessionLocal() as session:
-        abs_db = session.query(Ability).filter(Ability.name.in_(legal_abilities)).all()
+        pkmn = session.query(PokemonSpeciesV2).filter(PokemonSpeciesV2.name == species_name).first()
+        if not pkmn or not pkmn.abilities_json:
+            return []
+            
+        try:
+            abilities_names = json.loads(pkmn.abilities_json)
+        except:
+            abilities_names = []
+            
+        abs_db = session.query(AbilityV2).filter(AbilityV2.name.in_(abilities_names)).all()
         abs_map = {a.name: a.short_desc for a in abs_db}
         
-    return [{"name": name, "desc": abs_map.get(name, "Nessuna descrizione disponibile.")} for name in legal_abilities]
+    return [{"name": name, "desc": abs_map.get(name, "Nessuna descrizione disponibile.")} for name in abilities_names]
 
 def get_historical_abilities(species_name: str) -> List[str]:
     from database.models import PokemonBuild, Ability

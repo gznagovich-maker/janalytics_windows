@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Signal
 from database.connection import SessionLocal
-from database.models import MatchTeam, TeamVariant, PokemonSet
+from database.models_v2 import MatchTeamV2, TeamVariantV2, PokemonBuild
 from views.team_analysis_view import get_pokemon_pixmap
 from config.theme import Palette
 
@@ -35,6 +35,14 @@ class VariantBuildsWidget(QWidget):
         )
         self.btn_import.clicked.connect(self.on_import_clicked)
         header_layout.addWidget(self.btn_import)
+        
+        self.btn_copy = QPushButton("📋 Copia Paste")
+        self.btn_copy.setCursor(Qt.PointingHandCursor)
+        self.btn_copy.setStyleSheet(
+            f"background-color: {Palette.PRIMARY}; color: {Palette.BG_APP}; padding: 6px 12px; border-radius: 4px; font-weight: bold;"
+        )
+        self.btn_copy.clicked.connect(self.on_copy_paste_clicked)
+        header_layout.addWidget(self.btn_copy)
         
         header_layout.addStretch()
         
@@ -80,27 +88,27 @@ class VariantBuildsWidget(QWidget):
         for i in range(0, len(team_ids_list), chunk_size):
             chunk = team_ids_list[i:i+chunk_size]
             if chunk:
-                match_teams.extend(session.query(MatchTeam).filter(MatchTeam.id.in_(chunk)).all())
+                match_teams.extend(session.query(MatchTeamV2).filter(MatchTeamV2.id.in_(chunk)).all())
         
         variant_ids_list = list(set([mt.team_variant_id for mt in match_teams if mt.team_variant_id]))
         team_variants = []
         for i in range(0, len(variant_ids_list), chunk_size):
             chunk = variant_ids_list[i:i+chunk_size]
             if chunk:
-                team_variants.extend(session.query(TeamVariant).filter(TeamVariant.id.in_(chunk)).all())
+                team_variants.extend(session.query(TeamVariantV2).filter(TeamVariantV2.id.in_(chunk)).all())
         
-        set_ids = set()
+        build_ids = set()
         for tv in team_variants:
-            if tv.pokemon_set_ids:
-                for sid in tv.pokemon_set_ids:
-                    set_ids.add(sid)
+            for tvb in tv.builds:
+                if tvb.build_id:
+                    build_ids.add(tvb.build_id)
                     
-        set_ids_list = list(set_ids)
+        build_ids_list = list(build_ids)
         builds = []
-        for i in range(0, len(set_ids_list), chunk_size):
-            chunk = set_ids_list[i:i+chunk_size]
+        for i in range(0, len(build_ids_list), chunk_size):
+            chunk = build_ids_list[i:i+chunk_size]
             if chunk:
-                builds.extend(session.query(PokemonSet).filter(PokemonSet.id.in_(chunk)).all())
+                builds.extend(session.query(PokemonBuild).filter(PokemonBuild.id.in_(chunk)).all())
         
         species_builds = {}
         for b in builds:
@@ -128,18 +136,35 @@ class VariantBuildsWidget(QWidget):
                 if b.ability_id: abilities[b.ability_id] += 1
                 if b.tera_type: teras[b.tera_type] += 1
                 if b.nature: natures[b.nature] += 1
-                if b.moves:
-                    for m in b.moves.split(","):
-                        m = m.strip()
-                        if m: moves[m] += 1
+                if b.move_slots:
+                    for ms in b.move_slots:
+                        m_name = ms.move.name if ms.move else ms.move_id
+                        if m_name: moves[m_name] += 1
                         
             card = self.create_build_card(sp, len(sp_builds), items, abilities, teras, natures, moves)
             self.content_layout.addWidget(card, row, col)
             
-            # Generate paste for this species
             top_item = items.most_common(1)[0][0] if items else ""
             top_ability = abilities.most_common(1)[0][0] if abilities else ""
+            top_nature = natures.most_common(1)[0][0] if natures else ""
             top_moves = [m[0] for m in moves.most_common(4)]
+            
+            # Calcolo EVs più comuni e conversione in formato Champions (max 32 per stat)
+            evs_counter = Counter()
+            for b in sp_builds:
+                if b.stats_observations:
+                    obs = b.stats_observations[0]
+                    evs_counter[(obs.ev_hp, obs.ev_atk, obs.ev_def, obs.ev_spa, obs.ev_spd, obs.ev_spe)] = evs_counter.get((obs.ev_hp, obs.ev_atk, obs.ev_def, obs.ev_spa, obs.ev_spd, obs.ev_spe), 0) + 1
+                else:
+                    evs_counter[(0, 0, 0, 0, 0, 0)] += 1
+            
+            top_evs = evs_counter.most_common(1)[0][0] if evs_counter else (0, 0, 0, 0, 0, 0)
+            
+            def to_champ_ev(val: int) -> int:
+                return (val + 4) // 8 if val > 0 else 0
+                
+            total_evs = sum(top_evs)
+            champ_evs = top_evs if total_evs <= 66 else tuple(to_champ_ev(v) for v in top_evs)
             
             header = sp.capitalize()
             if top_item:
@@ -148,6 +173,20 @@ class VariantBuildsWidget(QWidget):
             
             if top_ability:
                 self.current_most_common_paste += f"Ability: {top_ability}\n"
+                
+            self.current_most_common_paste += "Level: 50\n"
+            
+            ev_labels = ["HP", "Atk", "Def", "SpA", "SpD", "Spe"]
+            ev_strings = []
+            for i, val in enumerate(champ_evs):
+                if val > 0:
+                    ev_strings.append(f"{val} {ev_labels[i]}")
+                    
+            if ev_strings:
+                self.current_most_common_paste += f"EVs: {' / '.join(ev_strings)}\n"
+                
+            if top_nature:
+                self.current_most_common_paste += f"{top_nature} Nature\n"
                 
             for m in top_moves:
                 self.current_most_common_paste += f"- {m}\n"
@@ -159,16 +198,21 @@ class VariantBuildsWidget(QWidget):
                 col = 0
                 row += 1
                 
+    def on_copy_paste_clicked(self):
+        if self.current_most_common_paste:
+            from PySide6.QtWidgets import QApplication
+            QApplication.clipboard().setText(self.current_most_common_paste.strip())
+            
         # --- TABELLA MATCHUP ---
         from collections import defaultdict
         from src.analytics.archetypes import get_match_team_archetypes
         from sqlalchemy.orm import joinedload
-        from database.models import Match, Turn, TurnAction
+        from database.models_v2 import MatchV2, TurnV2, TurnActionV2
         
-        matches_db = session.query(Match).options(
-            joinedload(Match.teams).joinedload(MatchTeam.variant),
-            joinedload(Match.turns).joinedload(Turn.actions)
-        ).filter(Match.id.in_(match_ids)).all()
+        matches_db = session.query(MatchV2).options(
+            joinedload(MatchV2.teams).joinedload(MatchTeamV2.variant),
+            joinedload(MatchV2.turns).joinedload(TurnV2.actions)
+        ).filter(MatchV2.id.in_(match_ids)).all()
         
         matchups = defaultdict(lambda: defaultdict(lambda: {'wins': 0, 'total': 0}))
         

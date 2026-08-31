@@ -2,7 +2,7 @@ import json
 from collections import Counter, defaultdict
 from sqlalchemy import select
 from sqlalchemy.orm import joinedload
-from database.models import MatchTeam, Match, Turn, TurnAction, TeamVariant
+from database.models_v2 import MatchTeamV2, MatchV2, TurnV2, TurnActionV2, TeamVariantV2
 
 def analizza_archetipo_statico(species_list: list[str]) -> list[str]:
     """
@@ -33,7 +33,7 @@ def analizza_archetipo_statico(species_list: list[str]) -> list[str]:
         
     return archetypes
 
-def get_match_team_archetypes(team: MatchTeam, session) -> list[str]:
+def get_match_team_archetypes(team: MatchTeamV2, session) -> list[str]:
     match = team.match
     if not match or not match.turns:
         return []
@@ -42,11 +42,11 @@ def get_match_team_archetypes(team: MatchTeam, session) -> list[str]:
     if N == 0:
         return []
         
-    variant = session.query(TeamVariant).filter_by(id=team.team_variant_id).first()
+    variant = team.variant
     if not variant:
         return []
         
-    set_ids = set(variant.pokemon_set_ids)
+    set_ids = set(tvb.build_id for tvb in variant.builds if tvb.build_id)
     
     # Variabili metriche
     weather_setters_in_team = 0
@@ -57,21 +57,17 @@ def get_match_team_archetypes(team: MatchTeam, session) -> list[str]:
     team_set_tailwind = False
     
     for turn in match.turns:
-        if team.player_slot == "p1" and turn.p1_tailwind:
-            team_set_tailwind = True
-        elif team.player_slot == "p2" and turn.p2_tailwind:
-            team_set_tailwind = True
-            
         for action in turn.actions:
-            if action.tags and isinstance(action.tags, dict):
+            tags = action.raw_tags
+            if tags and isinstance(tags, dict):
                 # 1. METEO DINAMICO (Attribution)
-                if "weather" in action.tags:
-                    tag_str_lower = str(action.tags["weather"]).lower()
+                if "weather" in tags:
+                    tag_str_lower = str(tags["weather"]).lower()
                     if "[upkeep]" not in tag_str_lower and "none" not in tag_str_lower and "clearskies" not in tag_str_lower:
-                        w_val = str(action.tags["weather"]).replace("'", "").replace("[", "").replace("]", "")
+                        w_val = str(tags["weather"]).replace("'", "").replace("[", "").replace("]", "")
                         current_weather = w_val.split(",")[0].strip() if "," in w_val else w_val
                         
-                        if action.actor_set_id in set_ids:
+                        if action.actor_build_id in set_ids:
                             team_weathers.add(current_weather)
                         else:
                             if f"[of] {team.player_slot}" in tag_str_lower:
@@ -80,32 +76,32 @@ def get_match_team_archetypes(team: MatchTeam, session) -> list[str]:
                                 team_weathers.add(current_weather)
                                 
                 # 2. SETUP SWEEP (Attribution)
-                if "boost" in action.tags:
-                    for evt in action.tags["boost"]:
+                if "boost" in tags:
+                    for evt in tags["boost"]:
                         if len(evt) >= 1 and evt[0].startswith(team.player_slot):
                             try:
                                 boost_stages += int(evt[2]) if len(evt) >= 3 else 1
                             except ValueError:
                                 boost_stages += 1
                 
-                if "setboost" in action.tags:
-                    for evt in action.tags["setboost"]:
+                if "setboost" in tags:
+                    for evt in tags["setboost"]:
                         if len(evt) >= 1 and evt[0].startswith(team.player_slot):
                             boost_stages += 2
                             
                 # 3. TRICK ROOM e TAILWIND (Attribution)
-                if "fieldstart" in action.tags:
-                    for evt in action.tags["fieldstart"]:
+                if "fieldstart" in tags:
+                    for evt in tags["fieldstart"]:
                         evt_str = str(evt).lower()
                         if "trick room" in evt_str:
-                            if action.actor_set_id in set_ids or f"[of] {team.player_slot}" in evt_str:
+                            if action.actor_build_id in set_ids or f"[of] {team.player_slot}" in evt_str:
                                 team_set_trickroom = True
                                 
-                if "sidestart" in action.tags:
-                    for evt in action.tags["sidestart"]:
+                if "sidestart" in tags:
+                    for evt in tags["sidestart"]:
                         evt_str = str(evt).lower()
                         if "tailwind" in evt_str:
-                            if action.actor_set_id in set_ids or f"[of] {team.player_slot}" in evt_str or f"['{team.player_slot}" in evt_str:
+                            if action.actor_build_id in set_ids or f"[of] {team.player_slot}" in evt_str or f"['{team.player_slot}" in evt_str:
                                 team_set_tailwind = True
                 
     assigned_match_archetypes = []
@@ -140,9 +136,10 @@ def analizza_archetipo_team(species_list: list[str], lista_match_ids: list[int],
     archetipi_weights = defaultdict(float)
     valid_matches = 0
     
-    stmt = select(MatchTeam).options(
-        joinedload(MatchTeam.match).joinedload(Match.turns).joinedload(Turn.actions)
-    ).filter(MatchTeam.id.in_(lista_match_ids))
+    stmt = select(MatchTeamV2).options(
+        joinedload(MatchTeamV2.match).joinedload(MatchV2.turns).joinedload(TurnV2.actions),
+        joinedload(MatchTeamV2.variant).joinedload(TeamVariantV2.builds)
+    ).filter(MatchTeamV2.id.in_(lista_match_ids))
     
     teams_db = session.scalars(stmt).unique().all()
     
@@ -177,38 +174,39 @@ def analizza_archetipo_team(species_list: list[str], lista_match_ids: list[int],
 def generate_unrecognized_actions_log(session) -> str:
     log_lines = []
     
-    matches = session.query(Match).all()
+    matches = session.query(MatchV2).all()
     for m in matches:
         for t in m.turns:
             for a in t.actions:
-                if not a.tags or not isinstance(a.tags, dict):
+                tags = a.raw_tags
+                if not tags or not isinstance(tags, dict):
                     continue
                 
-                if "weather" in a.tags:
-                    tag_lower = str(a.tags["weather"]).lower()
+                if "weather" in tags:
+                    tag_lower = str(tags["weather"]).lower()
                     if "[upkeep]" not in tag_lower and "none" not in tag_lower and "clearskies" not in tag_lower:
                         if not ("[of] p1" in tag_lower or "[of] p2" in tag_lower):
-                            if not a.actor_set_id:
-                                log_lines.append(f"Match {m.id} | Turn {t.turn_number} | Unrecognized Weather: {a.tags['weather']} | Action Details: {a.details}")
+                            if not a.actor_build_id:
+                                log_lines.append(f"Match {m.id} | Turn {t.turn_number} | Unrecognized Weather: {tags['weather']} | Action Details: {a.details}")
                                 
-                if "sidestart" in a.tags:
-                    for evt in a.tags["sidestart"]:
+                if "sidestart" in tags:
+                    for evt in tags["sidestart"]:
                         evt_lower = str(evt).lower()
                         if "tailwind" in evt_lower:
                             if not (evt_lower.startswith("p1") or evt_lower.startswith("p2") or evt_lower.startswith("['p1") or evt_lower.startswith("['p2")):
-                                if not a.actor_set_id:
+                                if not a.actor_build_id:
                                     log_lines.append(f"Match {m.id} | Turn {t.turn_number} | Unrecognized Tailwind: {evt} | Action Details: {a.details}")
                                     
-                if "fieldstart" in a.tags:
-                    for evt in a.tags["fieldstart"]:
+                if "fieldstart" in tags:
+                    for evt in tags["fieldstart"]:
                         evt_lower = str(evt).lower()
                         if "trick room" in evt_lower:
                             if not ("[of] p1" in evt_lower or "[of] p2" in evt_lower):
-                                if not a.actor_set_id:
+                                if not a.actor_build_id:
                                     log_lines.append(f"Match {m.id} | Turn {t.turn_number} | Unrecognized Trick Room: {evt} | Action Details: {a.details}")
                                     
-                if "boost" in a.tags:
-                    for evt in a.tags["boost"]:
+                if "boost" in tags:
+                    for evt in tags["boost"]:
                         evt_lower = str(evt).lower()
                         if not (evt_lower.startswith("p1") or evt_lower.startswith("p2") or evt_lower.startswith("['p1") or evt_lower.startswith("['p2")):
                             log_lines.append(f"Match {m.id} | Turn {t.turn_number} | Unrecognized Boost: {evt} | Action Details: {a.details}")

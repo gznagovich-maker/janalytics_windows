@@ -2,7 +2,7 @@ import itertools
 from collections import Counter
 from typing import List, Dict
 from sqlalchemy.orm import Session
-from database.models import Match, PokemonSpecies, MatchTeam, TeamVariant, PokemonSet
+from database.models_v2 import MatchV2, PokemonSpeciesV2, MatchTeamV2, TeamVariantV2, PokemonBuild, TeamVariantBuild, PokemonBuildMove
 from src.domain.core_models import CoreTeammates, BuildDetails, PokemonUsageStats, CoreCombo
 
 class MetaAnalysisRepository:
@@ -13,33 +13,43 @@ class MetaAnalysisRepository:
         """
         Returns a dict of team_id -> List of dictionaries containing pokemon data.
         """
-        match_teams = self.session.query(MatchTeam).join(Match).filter(Match.format == format_id).all()
+        match_teams = self.session.query(MatchTeamV2).join(MatchV2).filter(MatchV2.format == format_id).all()
         
         variant_ids = set([mt.team_variant_id for mt in match_teams if mt.team_variant_id])
-        team_variants = self.session.query(TeamVariant).filter(TeamVariant.id.in_(variant_ids)).all()
+        team_variants = self.session.query(TeamVariantV2).filter(TeamVariantV2.id.in_(variant_ids)).all()
         
-        set_ids = set()
-        for tv in team_variants:
-            if tv.pokemon_set_ids:
-                for sid in tv.pokemon_set_ids:
-                    set_ids.add(sid)
-                    
-        sets = self.session.query(PokemonSet).filter(PokemonSet.id.in_(set_ids)).all()
-        set_dict = {s.id: s for s in sets}
+        tvbs = self.session.query(TeamVariantBuild).filter(TeamVariantBuild.team_variant_id.in_(variant_ids)).all()
+        build_ids = set([tvb.build_id for tvb in tvbs if tvb.build_id])
+        
+        builds = self.session.query(PokemonBuild).filter(PokemonBuild.id.in_(build_ids)).all()
+        build_dict = {b.id: b for b in builds}
+        
         variant_dict = {tv.id: tv for tv in team_variants}
+        
+        build_moves = self.session.query(PokemonBuildMove).filter(PokemonBuildMove.build_id.in_(build_ids)).all()
+        
+        moves_by_build = {}
+        for bm in build_moves:
+            moves_by_build.setdefault(bm.build_id, []).append(bm.move_id)
+            
+        builds_by_tv = {}
+        for tvb in tvbs:
+            if tvb.build_id:
+                builds_by_tv.setdefault(tvb.team_variant_id, []).append(tvb.build_id)
         
         teams = {}
         for mt in match_teams:
             tid = mt.id
             teams[tid] = []
             tv = variant_dict.get(mt.team_variant_id)
-            if not tv or not tv.pokemon_set_ids:
+            if not tv:
                 continue
                 
-            for sid in tv.pokemon_set_ids:
-                if sid in set_dict:
-                    b = set_dict[sid]
-                    m = b.moves.split(',') if b.moves else []
+            b_ids = builds_by_tv.get(tv.id, [])
+            for sid in b_ids:
+                if sid in build_dict:
+                    b = build_dict[sid]
+                    m = [move for move in moves_by_build.get(sid, []) if move is not None]
                     m.sort()
                     moves_str = ",".join(m)
                     
@@ -76,7 +86,7 @@ class MetaAnalysisRepository:
             if not found: continue
             total_valid += 1
             
-            companions = [p['species'] for p in team if p['species'] != target_species]
+            companions = [p['species'] for p in team if p['species'] != target_species and p['species'] is not None]
             companions.sort()
             
             for c in companions:
@@ -131,16 +141,14 @@ class MetaAnalysisRepository:
         if total_teams == 0:
             return []
             
-        # Fetch species types
-        import json
-        species_rows = self.session.query(PokemonSpecies.id, PokemonSpecies.types).all()
+        # Fetch species types for V2
+        species_rows = self.session.query(PokemonSpeciesV2.id, PokemonSpeciesV2.type1, PokemonSpeciesV2.type2).all()
         species_types = {}
         for row in species_rows:
-            try:
-                t = json.loads(row.types) if isinstance(row.types, str) else row.types
-                species_types[row.id] = t
-            except:
-                species_types[row.id] = []
+            t = []
+            if row.type1: t.append(row.type1)
+            if row.type2: t.append(row.type2)
+            species_types[row.id] = t
                 
         # Calculate global occurrences
         species_counter = Counter()

@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QGroupBox, QSplitter, QTextEdit, QMessageBox, QFrame, QTextBrowser
 )
 from PySide6.QtCore import Signal, Qt, QUrl
-from database.repository import search_matches, get_match_details, delete_match, clear_all_matches
+from database.repository_v2 import search_matches_v2, delete_match_v2, clear_all_matches_v2
 from views.base_view import BaseHeaderWidget
 import json
 import copy
@@ -129,7 +129,7 @@ class ReplayListWidget(BaseHeaderWidget):
         pokemon_text = self.input_pokemon.text().strip()
 
         offset = (self.current_page - 1) * self.items_per_page
-        matches, total_count = search_matches(query_text, player_text, pokemon_text, limit=self.items_per_page, offset=offset)
+        matches, total_count = search_matches_v2(query_text, player_text, pokemon_text, "", limit=self.items_per_page, offset=offset)
         
         import math
         self.total_pages = max(1, math.ceil(total_count / self.items_per_page))
@@ -168,7 +168,7 @@ class ReplayListWidget(BaseHeaderWidget):
             QMessageBox.StandardButton.No
         )
         if reply == QMessageBox.StandardButton.Yes:
-            if delete_match(match_id):
+            if delete_match_v2(match_id):
                 self.load_replays()
             else:
                 QMessageBox.critical(self, "Errore", "Si è verificato un errore durante l'eliminazione.")
@@ -206,7 +206,7 @@ class ReplayListWidget(BaseHeaderWidget):
         if reply == QMessageBox.StandardButton.Yes:
             success_count = 0
             for m_id in selected_ids:
-                if delete_match(m_id):
+                if delete_match_v2(m_id):
                     success_count += 1
             
             QMessageBox.information(self, "Completato", f"Eliminati {success_count} su {len(selected_ids)} match.")
@@ -217,7 +217,7 @@ class ReplayListWidget(BaseHeaderWidget):
                                      "Sei sicuro di voler eliminare TUTTI i match dal database? Questa azione è irreversibile.",
                                      QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
         if reply == QMessageBox.StandardButton.Yes:
-            if clear_all_matches():
+            if clear_all_matches_v2():
                 QMessageBox.information(self, "Successo", "Database ripulito con successo.")
                 self.current_page = 1
                 self.load_replays()

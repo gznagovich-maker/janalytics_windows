@@ -82,6 +82,8 @@ class HomeWidget(QWidget):
     navigate_to_core_analysis = Signal()
     navigate_to_team_analysis = Signal()
     navigate_to_build_compare = Signal()
+    navigate_to_optimizer = Signal()
+    navigate_to_bulk_optimizer = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -145,7 +147,15 @@ class HomeWidget(QWidget):
         self.card_build_compare.clicked.connect(self.navigate_to_build_compare.emit)
         grid_layout.addWidget(self.card_build_compare, 2, 0)
         
-        # Add grid to main layout
+        # Ottimizzazione Team
+        self.card_optimizer = HomeCard("Ottimizzazione Team", "resources/icons/sparkles.svg", "resources/icons/sparkles-hover.svg")
+        self.card_optimizer.clicked.connect(self.navigate_to_optimizer.emit)
+        grid_layout.addWidget(self.card_optimizer, 2, 1)
+        
+        self.card_bulk_opt = HomeCard("Bulk Optimizer (AOB)", "resources/icons/beaker.svg", "resources/icons/beaker-hover.svg")
+        self.card_bulk_opt.clicked.connect(self.navigate_to_bulk_optimizer.emit)
+        grid_layout.addWidget(self.card_bulk_opt, 2, 2)
+
         main_layout.addLayout(grid_layout)
         
         # Add footer (1.2x top bar height = 1.2 * 64 = 77 approx)

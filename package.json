@@ -1,0 +1,24 @@
+{
+  "name": "janalytics_windows",
+  "version": "1.0.0",
+  "description": "",
+  "main": "abilities.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gznagovich-maker/janalytics_windows.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/gznagovich-maker/janalytics_windows/issues"
+  },
+  "homepage": "https://github.com/gznagovich-maker/janalytics_windows#readme",
+  "dependencies": {
+    "@smogon/calc": "^0.11.0"
+  }
+}

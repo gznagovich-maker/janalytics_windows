@@ -1,6 +1,7 @@
 import json
 import urllib.request
 import urllib.error
+import urllib.parse
 import datetime
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, 
@@ -9,7 +10,8 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import QThread, Signal, Qt
 from src.parser.showdown import parse_showdown_log
-from database.repository import save_parsed_match_to_db
+from database.repository_v2 import save_parsed_match_to_db_v2
+from database.materialized_views import refresh_all_views
 
 class MassImportWorker(QThread):
     progress = Signal(int, str)  # (current_count, message)
@@ -78,7 +80,7 @@ class MassImportWorker(QThread):
                     
                     self.progress.emit(i, f"[{i+1}/{total_to_import}] Parsing di {replay_id}...")
                     parsed_data = parse_showdown_log(log_content)
-                    save_parsed_match_to_db(parsed_data, replay_id)
+                    save_parsed_match_to_db_v2(parsed_data, replay_id)
                     
                     self.progress.emit(i + 1, f"[{i+1}/{total_to_import}] Completato {replay_id}")
                 except Exception as e:
@@ -87,6 +89,25 @@ class MassImportWorker(QThread):
             self.progress.emit(total_to_import, "Importazione multipla terminata!")
             self.finished.emit()
 
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class RefreshMVWorker(QThread):
+    """
+    Worker leggero che esegue il refresh delle Materialized Views
+    in background dopo un bulk import, senza bloccare la UI.
+    """
+    finished = Signal(int)   # numero di secondi impiegati
+    error    = Signal(str)
+
+    def run(self):
+        import time
+        t0 = time.time()
+        try:
+            refresh_all_views(concurrently=False)
+            elapsed = int(time.time() - t0)
+            self.finished.emit(elapsed)
         except Exception as e:
             self.error.emit(str(e))
 
@@ -132,7 +153,7 @@ class MassImportWidget(QWidget):
 
         top_layout.addWidget(QLabel("Numero Replays:"))
         self.spin_count = QSpinBox()
-        self.spin_count.setRange(1, 1000)
+        self.spin_count.setRange(1, 999999999)
         self.spin_count.setValue(10)
         top_layout.addWidget(self.spin_count)
 
@@ -193,6 +214,20 @@ class MassImportWidget(QWidget):
         QMessageBox.information(self, "Successo", "Importazione multipla completata!")
         if self.parent_main and hasattr(self.parent_main, 'list_view'):
             self.parent_main.list_view.load_replays()
+
+        # Avvia il refresh automatico delle Materialized Views in background
+        self.log_console.append("\n[MV] Aggiornamento statistiche in corso (background)...")
+        self._mv_worker = RefreshMVWorker()
+        self._mv_worker.finished.connect(self._on_mv_refreshed)
+        self._mv_worker.error.connect(self._on_mv_error)
+        self._mv_worker.start()
+
+    def _on_mv_refreshed(self, elapsed_seconds: int):
+        self.log_console.append(f"[MV] Statistiche aggiornate in {elapsed_seconds}s. Le analisi riflettono i nuovi replay.")
+
+    def _on_mv_error(self, error_msg: str):
+        # Il refresh MV è non-critico: logga l'errore senza mostrare popup
+        self.log_console.append(f"[MV] Attenzione: aggiornamento statistiche fallito — {error_msg}")
 
     def import_error(self, error_msg):
         self.btn_start.setEnabled(True)

@@ -71,7 +71,30 @@ def main():
         shutil.copy2(source_exe, dest_exe)
         if os.path.exists(source_db):
             shutil.copy2(source_db, dest_db)
-        print("File creati con successo.")
+        print("Eseguibile principale copiato con successo.")
+        
+        # 3.5 Esecuzione ambiente fresh (scaricamento asset, inizializzazione db)
+        print("\n" + "-" * 50)
+        print(" Configurazione dell'ambiente e download asset (potrebbe richiedere qualche minuto)...")
+        
+        original_cwd = os.getcwd()
+        os.chdir(install_dir)
+        try:
+            import setup_fresh_env
+            setup_fresh_env.create_directories()
+            setup_fresh_env.run_install_script()
+            setup_fresh_env.write_main_qss()
+            setup_fresh_env.generate_svg_icons()
+            setup_fresh_env.generate_logos()
+            setup_fresh_env.download_pokemon_icons()
+            print(" Configurazione dell'ambiente completata con successo!")
+        except Exception as se:
+            print(f" Attenzione: Errore durante la configurazione avanzata dell'ambiente: {se}")
+        finally:
+            os.chdir(original_cwd)
+            
+        print("-" * 50)
+
     except Exception as e:
         print(f"Errore durante la creazione dei file: {e}")
         input("Premi Invio per uscire...")

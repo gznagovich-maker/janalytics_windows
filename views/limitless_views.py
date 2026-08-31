@@ -12,7 +12,7 @@ from database.connection import SessionLocal
 from sqlalchemy.orm import joinedload
 from sqlalchemy import select
 from collections import defaultdict
-from database.models import Match, Team, PokemonBuild, Turn, TurnAction
+from database.models_v2 import MatchV2, MatchTeamV2, PokemonBuild, TurnV2, TurnActionV2
 from domain.limitless_scraper import normalize_limitless_pokemon, build_replay_core_dict
 from views.ui_utils import LoadingOverlay
 
@@ -89,7 +89,7 @@ class LimitlessTeamDetailWorker(QThread):
         from sqlalchemy.orm import joinedload
         from sqlalchemy import select
         from collections import defaultdict
-        from database.models import Match, Turn, MatchTeam, TeamVariant
+        from database.models_v2 import MatchV2, TurnV2, MatchTeamV2, TeamVariantV2
         from domain.limitless_scraper import normalize_limitless_pokemon, build_replay_core_dict
         from src.analytics.archetypes import analizza_archetipo_team, get_match_team_archetypes
         
