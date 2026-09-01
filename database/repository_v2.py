@@ -146,6 +146,11 @@ def save_parsed_match_to_db_v2(parsed_match, match_id_str: str):
             # Builds
             build_ids = []
             for poke in player_data.team:
+                # Skip incomplete builds — Pokémon from |poke| tags have no ability/item/moves.
+                # These come from non-OTS BO3 replays. The showteam filter in the importer
+                # should prevent this, but add a defensive check here too.
+                if not poke.ability and not poke.item and not poke.moves:
+                    continue
                 build_id = _upsert_build(session, poke)
                 build_ids.append(build_id)
                 tracking_key = f"{player_slot}: {poke.species.lower()}"

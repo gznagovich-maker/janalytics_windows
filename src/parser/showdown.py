@@ -293,6 +293,11 @@ class ShowdownParser:
             ability_name = parts[3] if len(parts) > 3 else ""
             p_id = target_id[:2]
             
+            # Detect if this is an externally-induced ability change (e.g. Worry Seed, Skill Swap, Role Play)
+            # In that case parts will have a [from] suffix: |-ability|slot|NewAbility|OldAbility|[from] move: Worry Seed
+            # We should NOT permanently overwrite the Pokemon's canonical ability in these cases.
+            is_external_change = any('[from]' in (parts[i] if i < len(parts) else '') for i in range(4, len(parts)))
+            
             if getattr(self, 'last_action', None):
                 actor_id = self.last_action.actor.split(':')[0] if self.last_action.actor and ':' in self.last_action.actor else None
                 if actor_id == target_id:
@@ -305,12 +310,31 @@ class ShowdownParser:
 
             if p_id in self.match.players and target_id in self.match.players[p_id].active_pokemon:
                 species = self.match.players[p_id].active_pokemon[target_id].species
-                self.match.players[p_id].active_pokemon[target_id].ability = ability_name
-                for pkmn in self.match.players[p_id].team:
-                    if pkmn.species == species:
-                        if not pkmn.ability:
-                            pkmn.ability = ability_name
-                        break
+                # active_pokemon holds the SAME reference as the team pokemon object.
+                # For externally-induced changes, save and restore the team's canonical ability.
+                if is_external_change:
+                    # Find the team pokemon and save its canonical ability
+                    team_pokemon_ability = None
+                    for pkmn in self.match.players[p_id].team:
+                        if pkmn.species == species:
+                            team_pokemon_ability = pkmn.ability
+                            break
+                    # Update the active battle state
+                    self.match.players[p_id].active_pokemon[target_id].ability = ability_name
+                    # Restore the team's canonical ability (same object, so re-set it)
+                    if team_pokemon_ability is not None:
+                        for pkmn in self.match.players[p_id].team:
+                            if pkmn.species == species:
+                                pkmn.ability = team_pokemon_ability
+                                break
+                else:
+                    # Normal ability reveal: update both active state and team
+                    self.match.players[p_id].active_pokemon[target_id].ability = ability_name
+                    for pkmn in self.match.players[p_id].team:
+                        if pkmn.species == species:
+                            if not pkmn.ability:
+                                pkmn.ability = ability_name
+                            break
 
         elif clean_tag in ('item', 'enditem'):
             target_id = parts[2].split(':')[0]

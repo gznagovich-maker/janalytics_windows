@@ -79,6 +79,14 @@ class MassImportWorker(QThread):
                         log_content = response.read().decode('utf-8')
                     
                     self.progress.emit(i, f"[{i+1}/{total_to_import}] Parsing di {replay_id}...")
+                    
+                    # Skip replays without |showteam| — these are BO3 games played without OTS
+                    # (marked with '!Force Open Team Sheets'), only containing |poke| tags
+                    # with no ability/item/moves data. Importing them creates incomplete builds.
+                    if "|showteam|" not in log_content:
+                        self.progress.emit(i + 1, f"[{i+1}/{total_to_import}] Skip {replay_id} (nessun tag showteam — no OTS)")
+                        continue
+                    
                     parsed_data = parse_showdown_log(log_content)
                     save_parsed_match_to_db_v2(parsed_data, replay_id)
                     
