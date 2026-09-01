@@ -29,7 +29,7 @@ class Pokemon:
     current_hp_pct: float = 100.0
     status: str = ""
     stat_stages: Dict[str, int] = field(
-        default_factory=lambda: {"atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0, "eva": 0, "acc": 0}
+        default_factory=lambda: {"atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0, "eva": 0, "acc": 0, "accuracy": 0, "evasion": 0}
     )
 
     def validate_champions_format(self, evs: Dict[str, int]) -> bool:
