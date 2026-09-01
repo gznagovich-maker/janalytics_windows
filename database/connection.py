@@ -50,10 +50,13 @@ _load_dotenv(BASE_DIR)
 # ──────────────────────────────────────────────────────────────────────────────
 # URL di connessione
 # ──────────────────────────────────────────────────────────────────────────────
-DATABASE_URL: str = os.environ.get(
-    "DATABASE_URL",
-    "postgresql://janalytics:changeme@localhost:5432/vgc_replays"
-)
+# Se c'è un file .env usa quello (es. per il tuo sviluppo in Postgres)
+# Altrimenti usa SQLite creando un file locale nel computer dell'utente finale
+default_db_path = Path.home() / "JAnalytics" / "vgc_replays.db"
+default_db_path.parent.mkdir(parents=True, exist_ok=True)
+default_sqlite_url = f"sqlite:///{default_db_path}"
+
+DATABASE_URL: str = os.environ.get("DATABASE_URL", default_sqlite_url)
 
 # Parametri pool configurabili da env
 _POOL_SIZE    = int(os.environ.get("DB_POOL_SIZE",    "5"))
@@ -64,18 +67,25 @@ _ECHO         = os.environ.get("DB_ECHO", "false").lower() == "true"
 # ──────────────────────────────────────────────────────────────────────────────
 # Engine SQLAlchemy
 # ──────────────────────────────────────────────────────────────────────────────
-engine = create_engine(
-    DATABASE_URL,
-    echo=_ECHO,
-    pool_size=_POOL_SIZE,
-    max_overflow=_MAX_OVERFLOW,
-    pool_timeout=_POOL_TIMEOUT,
-    pool_pre_ping=True,   # verifica la connessione prima di ogni uso
-    # PostgreSQL: imposta search_path e timezone per ogni sessione
-    connect_args={
-        "options": "-c timezone=UTC"
-    },
-)
+# Rimuoviamo gli argomenti specifici di Postgres se stiamo usando SQLite
+is_sqlite = DATABASE_URL.startswith("sqlite")
+
+if is_sqlite:
+    engine = create_engine(
+        DATABASE_URL,
+        echo=_ECHO,
+        # In SQLite non servono pool complessi e connect_args postgres
+    )
+else:
+    engine = create_engine(
+        DATABASE_URL,
+        echo=_ECHO,
+        pool_size=_POOL_SIZE,
+        max_overflow=_MAX_OVERFLOW,
+        pool_timeout=_POOL_TIMEOUT,
+        pool_pre_ping=True,
+        connect_args={"options": "-c timezone=UTC"},
+    )
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Session factory

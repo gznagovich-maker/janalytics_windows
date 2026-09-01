@@ -26,9 +26,17 @@ Migrazione PostgreSQL (v3):
 from typing import Optional, List
 from sqlalchemy import (
     ForeignKey, String, Integer, SmallInteger, Boolean,
-    DateTime, UniqueConstraint, CheckConstraint, Index, Numeric
+    DateTime, UniqueConstraint, CheckConstraint, Index, Numeric, Column, JSON
 )
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.compiler import compiles
+
+# -- Fix Compatibilità SQLite vs PostgreSQL --
+# Permette a SQLite di interpretare i campi JSONB (specifici di PG) come JSON standard (testo in SQLite)
+@compiles(JSONB, 'sqlite')
+def compile_jsonb_sqlite(type_, compiler, **kw):
+    return "JSON"
+
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from database.connection import Base
 
