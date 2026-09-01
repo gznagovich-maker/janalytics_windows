@@ -39,7 +39,7 @@ class ShowdownParser:
             self.match.format = parts[2] if len(parts) > 2 else "Unknown"
         elif tag == 'turn':
             self._parse_turn(parts)
-        elif tag in ('move', 'switch', 'terastallize', 'cant', 'detailschange'):
+        elif tag in ('move', 'switch', 'terastallize', 'cant', 'detailschange', 'drag', 'replace'):
             self._parse_active_action(tag, parts)
         elif tag.startswith('-') or tag == 'faint':
             self._parse_passive_event(tag, parts)
@@ -152,14 +152,14 @@ class ShowdownParser:
         if self.current_turn not in self.match.turns:
             self.match.turns[self.current_turn] = []
 
-        if tag in ('switch', 'detailschange'):
+        if tag in ('switch', 'drag', 'replace', 'detailschange'):
             slot_raw = parts[2]
             slot_id = slot_raw.split(':')[0]
             p_id = slot_id[:2]
             incoming_species = parts[3].split(',')[0].strip()
             
             if p_id in self.match.players:
-                if tag == 'switch':
+                if tag in ('switch', 'drag', 'replace'):
                     for pkmn in self.match.players[p_id].team:
                         id_team = _to_id(pkmn.species)
                         id_inc = _to_id(incoming_species)
