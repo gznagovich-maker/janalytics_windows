@@ -1,0 +1,216 @@
+|j|☆dcccxxiii
+|j|☆jirkunow
+|html|<table width="100%"><tr><td align="left">dcccxxiii</td><td align="right">jirkunow</tr><tr><td align="left"><i class="fa fa-circle-o"></i> <i class="fa fa-circle-o"></i> </td><td align="right"><i class="fa fa-circle-o"></i> <i class="fa fa-circle-o"></i> </tr></table>
+|uhtml|bestof|<h2><strong>Game 1</strong> of <a href="/game-bestof3-gen9championsvgc2026regmcbo3-2695208268">a best-of-3</a></h2>
+|t:|1791493420
+|gametype|doubles
+|player|p1|dcccxxiii|2|1084
+|player|p2|jirkunow|dancer|1108
+|gen|9
+|tier|[Gen 9 Champions] VGC 2026 Reg M-C (Bo3)
+|rated|
+|rule|Species Clause: Limit one of each Pokémon
+|rule|Item Clause: Limit 1 of each item
+|clearpoke
+|poke|p1|Garchomp, L50, F|
+|poke|p1|Volcarona, L50, M|
+|poke|p1|Gholdengo, L50|
+|poke|p1|Raichu, L50, M|
+|poke|p1|Incineroar, L50, M|
+|poke|p1|Rillaboom, L50, F|
+|poke|p2|Raichu, L50, M|
+|poke|p2|Garchomp, L50, M|
+|poke|p2|Gholdengo, L50|
+|poke|p2|Volcarona, L50, M|
+|poke|p2|Rillaboom, L50, F|
+|poke|p2|Basculegion, L50, M|
+|teampreview|4
+|showteam|p1|Garchomp||GarchompiteZ|SandVeil|DragonPulse,PowerGem,EarthPower,Protect|Modest||F|||50|]Volcarona||RockyHelmet|FlameBody|RagePowder,Tailwind,StruggleBug,Overheat|Timid||M|||50|]Gholdengo||LifeOrb|GoodasGold|ShadowBall,MakeItRain,NastyPlot,Protect|Modest|||||50|]Raichu||RaichuniteY|Static|ZapCannon,FocusBlast,FakeOut,Protect|Timid||M|||50|]Incineroar||SitrusBerry|Intimidate|DarkestLariat,FlareBlitz,FakeOut,PartingShot|Impish||M|||50|]Rillaboom||MiracleSeed|GrassySurge|GrassyGlide,WoodHammer,FakeOut,Uturn|Adamant||F|||50|
+|showteam|p2|Raichu||RaichuniteY|LightningRod|Protect,ZapCannon,FocusBlast,FakeOut|Timid||M|||50|]Garchomp||GarchompiteZ|RoughSkin|Protect,DragonPulse,EarthPower,PowerGem|Timid||M|||50|]Gholdengo||LifeOrb|GoodasGold|Protect,MakeItRain,ShadowBall,NastyPlot|Modest|||||50|]Volcarona||GrassySeed|FlameBody|Protect,HeatWave,StruggleBug,QuiverDance|Modest||M|||50|]Rillaboom||SitrusBerry|GrassySurge|FakeOut,GrassyGlide,WoodHammer,Uturn|Careful||F|||50|]Basculegion||ChoiceScarf|Adaptability|WaveCrash,LastRespects,FlipTurn,AquaJet|Jolly||M|||50|
+|
+|t:|1791493448
+|teamsize|p1|4
+|teamsize|p2|4
+|start
+|switch|p1a: Garchomp|Garchomp, L50, F|100/100
+|switch|p1b: Rillaboom|Rillaboom, L50, F|100/100
+|switch|p2a: Gholdengo|Gholdengo, L50|100/100
+|switch|p2b: Garchomp|Garchomp, L50, M|100/100
+|-fieldstart|move: Grassy Terrain|[from] ability: Grassy Surge|[of] p1b: Rillaboom
+|turn|1
+|
+|t:|1791493464
+|switch|p2b: Volcarona|Volcarona, L50, M|100/100
+|-enditem|p2b: Volcarona|Grassy Seed
+|-boost|p2b: Volcarona|def|1|[from] item: Grassy Seed
+|detailschange|p1a: Garchomp|Garchomp-Mega-Z, L50, F
+|-mega|p1a: Garchomp|Garchomp|Garchompite Z
+|move|p2a: Gholdengo|Protect|p2a: Gholdengo
+|-singleturn|p2a: Gholdengo|Protect
+|move|p1b: Rillaboom|Fake Out|p2b: Volcarona
+|-damage|p2b: Volcarona|88/100
+|move|p1a: Garchomp|Earth Power|p2a: Gholdengo
+|-activate|p2a: Gholdengo|move: Protect
+|
+|-heal|p2b: Volcarona|94/100|[from] Grassy Terrain
+|upkeep
+|turn|2
+|
+|t:|1791493495
+|move|p1a: Garchomp|Power Gem|p2b: Volcarona
+|-supereffective|p2b: Volcarona|2
+|-damage|p2b: Volcarona|0 fnt
+|faint|p2b: Volcarona
+|move|p2a: Gholdengo|Make It Rain|p1a: Garchomp|[spread] p1a,p1b
+|-damage|p1a: Garchomp|32/100
+|-damage|p1b: Rillaboom|25/100
+|-unboost|p2a: Gholdengo|spa|2
+|-damage|p2a: Gholdengo|90/100|[from] item: Life Orb
+|move|p1b: Rillaboom|U-turn|p2a: Gholdengo
+|-resisted|p2a: Gholdengo|2
+|-damage|p2a: Gholdengo|83/100
+|
+|t:|1791493510
+|switch|p1b: Incineroar|Incineroar, L50, M|100/100|[from] U-turn
+|-ability|p1b: Incineroar|Intimidate|boost
+|-unboost|p2a: Gholdengo|atk|1
+|
+|-heal|p2a: Gholdengo|89/100|[from] Grassy Terrain
+|upkeep
+|
+|t:|1791493515
+|switch|p2b: Garchomp|Garchomp, L50, M|100/100
+|turn|3
+|
+|t:|1791493531
+|switch|p2a: Rillaboom|Rillaboom, L50, F|100/100
+|detailschange|p2b: Garchomp|Garchomp-Mega-Z, L50, M
+|-mega|p2b: Garchomp|Garchomp|Garchompite Z
+|move|p2b: Garchomp|Protect|p2b: Garchomp
+|-singleturn|p2b: Garchomp|Protect
+|move|p1a: Garchomp|Earth Power|p2a: Rillaboom
+|-resisted|p2a: Rillaboom|1
+|-damage|p2a: Rillaboom|83/100
+|move|p1b: Incineroar|Parting Shot|p2b: Garchomp
+|-activate|p2b: Garchomp|move: Protect
+|
+|-heal|p2a: Rillaboom|89/100|[from] Grassy Terrain
+|upkeep
+|turn|4
+|
+|t:|1791493553
+|move|p1a: Garchomp|Protect|p1a: Garchomp
+|-singleturn|p1a: Garchomp|Protect
+|move|p2a: Rillaboom|Fake Out|p1b: Incineroar
+|-damage|p1b: Incineroar|92/100
+|move|p2b: Garchomp|Dragon Pulse|p1a: Garchomp
+|-activate|p1a: Garchomp|move: Protect
+|cant|p1b: Incineroar|flinch
+|
+|-heal|p2a: Rillaboom|95/100|[from] Grassy Terrain
+|-heal|p1b: Incineroar|98/100|[from] Grassy Terrain
+|upkeep
+|turn|5
+|
+|t:|1791493589
+|switch|p1a: Gholdengo|Gholdengo, L50|100/100
+|move|p2b: Garchomp|Earth Power|p1b: Incineroar
+|-supereffective|p1b: Incineroar|1
+|-damage|p1b: Incineroar|36/100
+|-enditem|p1b: Incineroar|Sitrus Berry|[eat]
+|-heal|p1b: Incineroar|61/100|[from] item: Sitrus Berry
+|move|p2a: Rillaboom|U-turn|p1b: Incineroar
+|-damage|p1b: Incineroar|47/100
+|
+|t:|1791493602
+|switch|p2a: Gholdengo|Gholdengo, L50|89/100|[from] U-turn
+|move|p1b: Incineroar|Parting Shot|p2b: Garchomp
+|-unboost|p2b: Garchomp|atk|1
+|-unboost|p2b: Garchomp|spa|1
+|
+|t:|1791493609
+|switch|p1b: Rillaboom|Rillaboom, L50, F|25/100|[from] Parting Shot
+|
+|-heal|p2a: Gholdengo|95/100|[from] Grassy Terrain
+|-heal|p1b: Rillaboom|31/100|[from] Grassy Terrain
+|-fieldend|move: Grassy Terrain
+|upkeep
+|turn|6
+|
+|t:|1791493643
+|move|p2b: Garchomp|Protect|p2b: Garchomp
+|-singleturn|p2b: Garchomp|Protect
+|move|p1b: Rillaboom|Fake Out|p2b: Garchomp
+|-activate|p2b: Garchomp|move: Protect
+|move|p1a: Gholdengo|Shadow Ball|p2a: Gholdengo
+|-supereffective|p2a: Gholdengo|1
+|-damage|p2a: Gholdengo|0 fnt
+|faint|p2a: Gholdengo
+|-damage|p1a: Gholdengo|90/100|[from] item: Life Orb
+|
+|upkeep
+|
+|t:|1791493667
+|switch|p2a: Rillaboom|Rillaboom, L50, F|95/100
+|-fieldstart|move: Grassy Terrain|[from] ability: Grassy Surge|[of] p2a: Rillaboom
+|turn|7
+|
+|t:|1791493677
+|switch|p1b: Incineroar|Incineroar, L50, M|47/100
+|-ability|p1b: Incineroar|Intimidate|boost
+|-unboost|p2a: Rillaboom|atk|1
+|-unboost|p2b: Garchomp|atk|1
+|move|p2b: Garchomp|Dragon Pulse|p1b: Incineroar
+|-damage|p1b: Incineroar|17/100
+|move|p1a: Gholdengo|Make It Rain|p2b: Garchomp|[spread] p2a,p2b
+|-damage|p2a: Rillaboom|39/100
+|-damage|p2b: Garchomp|26/100
+|-unboost|p1a: Gholdengo|spa|2
+|-enditem|p2a: Rillaboom|Sitrus Berry|[eat]
+|-heal|p2a: Rillaboom|64/100|[from] item: Sitrus Berry
+|-damage|p1a: Gholdengo|80/100|[from] item: Life Orb
+|move|p2a: Rillaboom|Wood Hammer|p1a: Gholdengo
+|-resisted|p1a: Gholdengo|1
+|-damage|p1a: Gholdengo|56/100
+|-damage|p2a: Rillaboom|57/100|[from] Recoil
+|
+|-heal|p1a: Gholdengo|62/100|[from] Grassy Terrain
+|-heal|p2a: Rillaboom|63/100|[from] Grassy Terrain
+|-heal|p1b: Incineroar|23/100|[from] Grassy Terrain
+|upkeep
+|turn|8
+|
+|t:|1791493700
+|move|p1b: Incineroar|Fake Out|p2a: Rillaboom
+|-crit|p2a: Rillaboom
+|-damage|p2a: Rillaboom|50/100y
+|move|p2b: Garchomp|Earth Power|p1b: Incineroar
+|-supereffective|p1b: Incineroar|1
+|-damage|p1b: Incineroar|0 fnt
+|faint|p1b: Incineroar
+|move|p1a: Gholdengo|Make It Rain|p2b: Garchomp|[spread] p2a,p2b
+|-damage|p2a: Rillaboom|17/100
+|-damage|p2b: Garchomp|0 fnt
+|-unboost|p1a: Gholdengo|spa|2
+|faint|p2b: Garchomp
+|-damage|p1a: Gholdengo|53/100|[from] item: Life Orb
+|cant|p2a: Rillaboom|flinch
+|
+|-heal|p1a: Gholdengo|59/100|[from] Grassy Terrain
+|-heal|p2a: Rillaboom|23/100|[from] Grassy Terrain
+|upkeep
+|inactive|Battle timer is ON: inactive players will automatically lose when time's up. (requested by jirkunow)
+|
+|t:|1791493716
+|switch|p1b: Garchomp|Garchomp-Mega-Z, L50, F|32/100
+|turn|9
+|
+|t:|1791493722
+|move|p1b: Garchomp|Dragon Pulse|p2a: Rillaboom
+|-damage|p2a: Rillaboom|0 fnt
+|faint|p2a: Rillaboom
+|
+|win|dcccxxiii
+||dcccxxiii is ready for game 2.
+||jirkunow is ready for game 2.
+|uhtml|next|Next: <a href="/battle-gen9championsvgc2026regmcbo3-2695210688"><strong>Game 2 of 3</strong></a>

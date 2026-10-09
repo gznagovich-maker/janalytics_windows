@@ -50,13 +50,29 @@ _load_dotenv(BASE_DIR)
 # ──────────────────────────────────────────────────────────────────────────────
 # URL di connessione
 # ──────────────────────────────────────────────────────────────────────────────
+import shutil
+
 # Se c'è un file .env usa quello (es. per il tuo sviluppo in Postgres)
 # Altrimenti usa SQLite creando un file locale nel computer dell'utente finale
 default_db_path = Path.home() / "JAnalytics" / "vgc_replays.db"
-default_db_path.parent.mkdir(parents=True, exist_ok=True)
+
+# Se stiamo usando SQLite e il file non esiste, proviamo a copiare il database "base" pre-compilato
+if not default_db_path.exists():
+    default_db_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Cerca il file base_metadata.db (in dev è nella root, nell'exe è in _MEIPASS)
+    if getattr(sys, 'frozen', False):
+        base_db_source = Path(sys._MEIPASS) / "base_metadata.db"
+    else:
+        base_db_source = BASE_DIR / "base_metadata.db"
+        
+    if base_db_source.exists():
+        shutil.copy2(base_db_source, default_db_path)
+
 default_sqlite_url = f"sqlite:///{default_db_path}"
 
 DATABASE_URL: str = os.environ.get("DATABASE_URL", default_sqlite_url)
+
 
 # Parametri pool configurabili da env
 _POOL_SIZE    = int(os.environ.get("DB_POOL_SIZE",    "5"))

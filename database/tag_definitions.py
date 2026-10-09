@@ -135,6 +135,10 @@ TAGS: Dict[str, List[str]] = {
         "item_interact",      # interagisce con strumenti
         "entry_hazard_immune",# magic-guard, magic-bounce
         "trick_room_related", # analytic, slow-start
+        "defensive",          # roles
+        "offensive",
+        "disruptive",
+        "unclassified",
     ],
 
     # ── Categorie strumenti ────────────────────────────────────────────────
@@ -146,6 +150,9 @@ TAGS: Dict[str, List[str]] = {
         "berry_pinch",     # carattere/attivazione <25% HP
         "held_boost",      # life-orb, muscle-band, etc.
         "defensive",       # leftovers, rocky-helmet, eviolite
+        "offensive",       # choice-band, life-orb, etc.
+        "disruptive",      # red-card, eject-button
+        "unclassified",
         "terrain_seed",    # misty-seed, electric-seed, etc.
         "type_gem",        # normal-gem, ecc.
         "mega_stone",      # megapietra

@@ -19,7 +19,8 @@ function runCalculation(input) {
     description: result.desc(),
     attackerSpe: attacker.stats ? attacker.stats.spe : 0,
     defenderSpe: defender.stats ? defender.stats.spe : 0,
-    moveCategory: move.category
+    moveCategory: move.category,
+    defenderMaxHP: defender.maxHP()
   };
 }
 

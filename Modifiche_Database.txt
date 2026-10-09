@@ -1,0 +1,34 @@
+MODIFICHE AL DATABASE (models_v2.py / SQLAlchemy)
+
+Per supportare la Web App e le funzionalita' "Salvataggio team" e "Salvataggio analisi", e' necessario estendere lo schema corrente.
+
+1. Nuova Tabella: User (Gestione Utenti)
+Serve per associare team e analisi salvate.
+- id (UUID o String, PK)
+- username (String)
+- email (String)
+- hashed_password (String)
+- created_at (DateTime)
+
+2. Nuova Tabella: UserSavedTeam (Salvataggio Team)
+Unisce un utente a un TeamVariantV2, permettendo di dargli un nome personalizzato.
+- id (Integer, PK)
+- user_id (FK -> user.id)
+- team_variant_id (FK -> team_variant_v2.id)
+- team_name (String, per identificare il team come "VGC24 - Tailwind")
+- is_public (Boolean, per eventuale condivisione)
+- created_at (DateTime)
+
+3. Nuova Tabella: UserSavedAnalysis (Salvataggio Analisi)
+Salva i criteri/parametri con cui un'analisi è stata effettuata.
+- id (Integer, PK)
+- user_id (FK -> user.id)
+- saved_team_id (FK -> user_saved_team.id) (Opzionale)
+- analysis_type (String) (es. "DamageReport", "BestSwitch")
+- parameters_json (JSONB) (contiene i filtri usati per ri-eseguire l'analisi: es. filtri su tier, evs_spreads_used, etc.)
+- snapshot_url (String) (Opzionale, link a S3 o file per PDF generato staticamente)
+- created_at (DateTime)
+
+4. Adeguamenti alle Tabelle Esistenti:
+- In `team_variant_v2` e `pokemon_build`: 
+  La deduplicazione basata sull'hash SHA-256 (che gia' usi) e' PERFETTA per il Web. Piu' utenti che salvano lo stesso team punteranno allo stesso record fisico, risparmiando spazio (Single Source of Truth).

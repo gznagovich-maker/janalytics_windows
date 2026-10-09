@@ -102,3 +102,29 @@ def get_pokemon_icon_path(species_name: str) -> str:
             return None
             
     return icon_path.replace("\\", "/")
+
+def get_item_icon_path(item_name: str) -> str:
+    """
+    Restituisce il percorso dell'icona per lo strumento, scaricandola se necessario da Showdown.
+    """
+    if not item_name or item_name in ("Vuoto", "", "Nessuno", "Sconosciuto"):
+        return None
+        
+    compact_id = to_id(item_name)
+    
+    icon_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "assets", "item_icons"))
+    os.makedirs(icon_dir, exist_ok=True)
+    
+    icon_path = os.path.join(icon_dir, f"{compact_id}.png")
+    
+    if not os.path.exists(icon_path):
+        url = f"https://play.pokemonshowdown.com/sprites/itemicons/{compact_id}.png"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=3) as r:
+                with open(icon_path, "wb") as f:
+                    f.write(r.read())
+        except Exception:
+            return None
+            
+    return icon_path.replace("\\", "/")

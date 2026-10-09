@@ -116,6 +116,14 @@ class TeamAnalysisWidget(QWidget):
         self.spn_distance.setValue(2)
         self.spn_distance.setFixedWidth(60)
         
+        lbl_min_elo = QLabel("Min Elo:")
+        lbl_min_elo.setStyleSheet(f"color: {Palette.TEXT_MUTED}; font-size: 13px;")
+        self.spn_min_elo = QSpinBox()
+        self.spn_min_elo.setRange(0, 4000)
+        self.spn_min_elo.setValue(0)
+        self.spn_min_elo.setFixedWidth(70)
+        self.spn_min_elo.setToolTip("Escludi giocatori con Elo inferiore a questo valore. 0 = nessun filtro")
+        
         self.btn_calc = QPushButton("Calcola Raggruppamenti")
         self.btn_calc.setStyleSheet(
             "QPushButton {"
@@ -161,6 +169,8 @@ class TeamAnalysisWidget(QWidget):
         db_filters_layout.addWidget(self.txt_trainer)
         db_filters_layout.addWidget(lbl_dist)
         db_filters_layout.addWidget(self.spn_distance)
+        db_filters_layout.addWidget(lbl_min_elo)
+        db_filters_layout.addWidget(self.spn_min_elo)
         db_filters_layout.addStretch()
         db_filters_layout.addWidget(self.btn_calc)
         db_filters_layout.addWidget(self.btn_export)
@@ -255,12 +265,13 @@ class TeamAnalysisWidget(QWidget):
         left_layout.setContentsMargins(0, 0, 0, 0)
         
         self.table_groups = QTableWidget()
-        self.table_groups.setColumnCount(4)
-        self.table_groups.setHorizontalHeaderLabels(["Core (Componente Base)", "Win Rate (%)", "Match", "Varianti"])
+        self.table_groups.setColumnCount(5)
+        self.table_groups.setHorizontalHeaderLabels(["Core (Componente Base)", "Win Rate (%)", "Match", "Avg Elo", "Varianti"])
         self.table_groups.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.table_groups.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self.table_groups.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.table_groups.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.table_groups.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self.table_groups.verticalHeader().setDefaultSectionSize(45)
         self.table_groups.itemSelectionChanged.connect(self.on_group_selected)
         
@@ -290,6 +301,29 @@ class TeamAnalysisWidget(QWidget):
         
         main_layout.addWidget(splitter)
         
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.refresh_formats()
+        
+    def refresh_formats(self):
+        current_selection = self.cmb_format.currentText()
+        
+        session = SessionLocal()
+        formats = [f[0] for f in session.query(MatchV2.format).distinct().all() if f[0]]
+        session.close()
+        
+        self.cmb_format.blockSignals(True)
+        self.cmb_format.clear()
+        self.cmb_format.addItems(["Tutti"] + formats)
+        
+        idx = self.cmb_format.findText(current_selection)
+        if idx >= 0:
+            self.cmb_format.setCurrentIndex(idx)
+        else:
+            self.cmb_format.setCurrentIndex(0)
+            
+        self.cmb_format.blockSignals(False)
+        
     def load_data(self):
         self.btn_calc.setText("⟳  Calcolo in corso...")
         self.btn_calc.setEnabled(False)
@@ -304,10 +338,12 @@ class TeamAnalysisWidget(QWidget):
             dist = self.spn_distance.value()
             fmt = self.cmb_format.currentText()
             trainer = self.txt_trainer.text().strip()
+            min_elo = self.spn_min_elo.value()
             self.groupings = get_team_archetypes_and_groupings(
                 max_distance=dist,
                 format_filter=fmt,
-                trainer_filter=trainer
+                trainer_filter=trainer,
+                min_elo=min_elo
             )
             self.populate_table()
         except Exception as e:
@@ -403,9 +439,13 @@ class TeamAnalysisWidget(QWidget):
             match_item.setTextAlignment(Qt.AlignCenter)
             self.table_groups.setItem(row_idx, 2, match_item)
             
+            avg_elo_item = NumericTableItem(g.get('avg_elo', 0), str(g.get('avg_elo', 0)) if g.get('avg_elo', 0) > 0 else "-")
+            avg_elo_item.setTextAlignment(Qt.AlignCenter)
+            self.table_groups.setItem(row_idx, 3, avg_elo_item)
+            
             var_item = NumericTableItem(g['num_variants'])
             var_item.setTextAlignment(Qt.AlignCenter)
-            self.table_groups.setItem(row_idx, 3, var_item)
+            self.table_groups.setItem(row_idx, 4, var_item)
             
             row_idx += 1
             
@@ -430,21 +470,30 @@ class TeamAnalysisWidget(QWidget):
             var_item = QTreeWidgetItem(self.tree_variants)
             self.tree_variants.setItemWidget(var_item, 0, self.create_variant_header(v, i+1))
             
-            for match_data in v["match_ids"]:
-                match_id = match_data["id"]
-                match_title = match_data["title"]
+            for config_id, config_data in v.get("configs", {}).items():
+                config_item = QTreeWidgetItem(var_item)
+                elo_text = f" - Elo Medio: {config_data.get('avg_elo', 0)}" if config_data.get('avg_elo', 0) > 0 else ""
+                config_item.setText(0, f"Configurazione (ID: {config_id[:8]}) - {len(config_data['matches'])} match{elo_text}")
+                config_item.setForeground(0, QBrush(QColor("#C2BFBC")))
                 
-                child_item = QTreeWidgetItem(var_item)
-                child_item.setText(0, f"▶ {match_title} ({match_id})")
-                child_item.setData(0, Qt.UserRole, match_id)
+                for match_data in config_data["matches"]:
+                    match_id = match_data["id"]
+                    match_title = match_data["title"]
+                    rating = match_data.get("rating")
+                    
+                    child_item = QTreeWidgetItem(config_item)
+                    rating_str = f" [Elo: {rating}]" if rating else ""
+                    child_item.setText(0, f"▶ {match_title}{rating_str} ({match_id})")
+                    child_item.setData(0, Qt.UserRole, match_id)
                 
     def create_variant_header(self, variant: dict, index: int) -> QWidget:
         container = QWidget()
         layout = QHBoxLayout(container)
         layout.setContentsMargins(5, 5, 5, 5)
         
-        lbl_info = QLabel(f"<b>VARIANTE {index}</b><br><span style='color:#ccc; font-size:10px;'>{variant['total']} match, {variant['wins']} win</span>")
-        lbl_info.setFixedWidth(100)
+        elo_text = f", Elo: {variant.get('avg_elo', 0)}" if variant.get('avg_elo', 0) > 0 else ""
+        lbl_info = QLabel(f"<b>VARIANTE {index}</b><br><span style='color:#ccc; font-size:10px;'>{variant['total']} match, {variant['wins']} win{elo_text}</span>")
+        lbl_info.setFixedWidth(120)
         layout.addWidget(lbl_info)
         
         arch_html = variant.get("archetypes", [""])[0]

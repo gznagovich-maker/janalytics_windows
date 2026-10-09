@@ -41,7 +41,7 @@ def _upsert_build(session: Session, poke: Pokemon,
     L'hash NON include EV/IV — ogni spread viene salvato in PokemonBuildStats (upsert).
     Restituisce il build_id SHA-256.
     """
-    moves_list = [to_id(m) for m in (poke.moves or []) if m]
+    moves_list = list(dict.fromkeys(to_id(m) for m in (poke.moves or []) if m))
 
     build_id = compute_build_hash(
         species=poke.species or "",
@@ -149,8 +149,6 @@ def save_parsed_match_to_db_v2(parsed_match, match_id_str: str):
                 # Skip incomplete builds — Pokémon from |poke| tags have no ability/item/moves.
                 # These come from non-OTS BO3 replays. The showteam filter in the importer
                 # should prevent this, but add a defensive check here too.
-                if not poke.ability and not poke.item and not poke.moves:
-                    continue
                 build_id = _upsert_build(session, poke)
                 build_ids.append(build_id)
                 tracking_key = f"{player_slot}: {poke.species.lower()}"

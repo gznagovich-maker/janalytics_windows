@@ -23,7 +23,8 @@ class BulkOptimizer:
         budget: int = 66,
         report_limit: int = 20,
         progress_callback=None,
-        screens: dict = None
+        screens: dict = None,
+        is_static_mode: bool = False
     ) -> Tuple[Dict[str, int], List[Dict[str, Any]], str]:
         """
         Esegue l'Algoritmo di Ottimizzazione Bulk (AOB).
@@ -42,10 +43,20 @@ class BulkOptimizer:
         spd_mod = nature_mods["spd"]
 
         is_champions = budget <= 66
-        if is_champions:
-            valid_ev_steps = list(range(0, 33)) # 0..32
+        
+        if is_static_mode:
+            target_evs = target_pokemon.get("options", {}).get("evs", {})
+            valid_hp_steps = [target_evs.get("hp", target_evs.get("HP", 0))]
+            valid_def_steps = [target_evs.get("def", target_evs.get("Def", 0))]
+            valid_spd_steps = [target_evs.get("spd", target_evs.get("SpD", 0))]
         else:
-            valid_ev_steps = [0, 4] + list(range(12, 253, 8))
+            if is_champions:
+                valid_ev_steps = list(range(0, 33)) # 0..32
+            else:
+                valid_ev_steps = [0, 4] + list(range(12, 253, 8))
+            valid_hp_steps = valid_ev_steps
+            valid_def_steps = valid_ev_steps
+            valid_spd_steps = valid_ev_steps
             
         def get_std_ev(ev: int) -> int:
             if not is_champions: return ev
@@ -59,7 +70,7 @@ class BulkOptimizer:
             t_opts = PokemonOptions(**threat.get("options", {}))
             moves = threat.get("moves", [])
             for m_idx, move in enumerate(moves):
-                for ev_val in valid_ev_steps:
+                for ev_val in valid_def_steps:
                     std_ev = get_std_ev(ev_val)
                     # Test Physical (vary DEF, fix SPD to 0)
                     d_opts_phys = PokemonOptions(
@@ -81,6 +92,8 @@ class BulkOptimizer:
                     })
                     mapping_info.append((t_idx, m_idx, "def", ev_val))
                     
+                for ev_val in valid_spd_steps:
+                    std_ev = get_std_ev(ev_val)
                     # Test Special (vary SPD, fix DEF to 0)
                     d_opts_spec = PokemonOptions(
                         nature=nature,
@@ -145,13 +158,13 @@ class BulkOptimizer:
         
         valid_candidates = []
         
-        for hp_ev in valid_ev_steps:
+        for hp_ev in valid_hp_steps:
             std_hp = get_std_ev(hp_ev)
             max_hp = self._calc_hp(base_hp, 31, std_hp)
-            for def_ev in valid_ev_steps:
-                for spd_ev in valid_ev_steps:
+            for def_ev in valid_def_steps:
+                for spd_ev in valid_spd_steps:
                     total_spent = hp_ev + def_ev + spd_ev
-                    if total_spent > budget:
+                    if total_spent > budget and not is_static_mode:
                         continue
                         
                     survives_all = True
@@ -166,13 +179,14 @@ class BulkOptimizer:
                             
                         if dmg >= max_hp:
                             survives_all = False
-                            break
+                            if not is_static_mode:
+                                break
                             
                         pct = (dmg / max_hp) * 100 if max_hp > 0 else 100
                         if pct > max_pct_dmg:
                             max_pct_dmg = pct
                                 
-                    if survives_all:
+                    if survives_all or is_static_mode:
                         valid_candidates.append({
                             "hp": hp_ev, "def": def_ev, "spd": spd_ev,
                             "total": total_spent,
@@ -196,10 +210,16 @@ class BulkOptimizer:
                 
             valid_candidates.sort(key=sort_key)
             best_spread = valid_candidates[0]
-            status_msg = f"Ottimizzazione riuscita! Danno massimo: {best_spread['max_pct_dmg']:.1f}% spendendo {best_spread['total']} EVs."
+            if is_static_mode:
+                status_msg = f"Calcolo Statico completato. Danno massimo subito: {best_spread['max_pct_dmg']:.1f}%."
+            else:
+                status_msg = f"Ottimizzazione riuscita! Danno massimo: {best_spread['max_pct_dmg']:.1f}% spendendo {best_spread['total']} EVs."
         else:
             status_msg = "Attenzione: Nessuna spread garantisce la sopravvivenza a TUTTI gli attacchi. Applicato Euristica Bulk."
-            best_spread = self._maximize_bulk_heuristic(budget, base_hp, base_def, base_spd, def_mod, spd_mod, valid_ev_steps, get_std_ev)
+            if is_static_mode:
+                best_spread = {"hp": valid_hp_steps[0], "def": valid_def_steps[0], "spd": valid_spd_steps[0], "total": valid_hp_steps[0] + valid_def_steps[0] + valid_spd_steps[0]}
+            else:
+                best_spread = self._maximize_bulk_heuristic(budget, base_hp, base_def, base_spd, def_mod, spd_mod, valid_hp_steps, get_std_ev)
 
         best_spread["final_hp"] = self._calc_hp(base_hp, 31, get_std_ev(best_spread["hp"]))
         best_spread["final_def"] = self._calc_stat(base_def, 31, get_std_ev(best_spread["def"]), def_mod)

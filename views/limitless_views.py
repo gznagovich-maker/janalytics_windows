@@ -325,7 +325,13 @@ class LimitlessTournamentsWidget(QWidget):
         self.combo_format = QComboBox()
         self.combo_format.addItem("Tutti", "")
         self.combo_format.setEnabled(False)
+        self.combo_format.setEditable(True)
         top_layout.addWidget(self.combo_format)
+        
+        self.btn_refresh_formats = QPushButton("Aggiorna Formati")
+        self.btn_refresh_formats.setToolTip("Aggiorna la lista dei formati da Limitless")
+        self.btn_refresh_formats.clicked.connect(self.refresh_formats)
+        top_layout.addWidget(self.btn_refresh_formats)
         
         top_layout.addWidget(QLabel("Num Tornei:"))
         self.spin_count = QSpinBox()
@@ -409,9 +415,30 @@ class LimitlessTournamentsWidget(QWidget):
         for code, name in formats_dict.items():
             self.combo_format.addItem(name, code)
         self.combo_format.setEnabled(True)
+        if hasattr(self, 'btn_refresh_formats'):
+            self.btn_refresh_formats.setEnabled(True)
+            self.lbl_status.setText("Formati caricati.")
+
+    def refresh_formats(self):
+        self.combo_format.setEnabled(False)
+        self.btn_refresh_formats.setEnabled(False)
+        self.lbl_status.setText("Aggiornamento formati da Limitless in corso...")
+        
+        self.format_worker = LimitlessFormatsWorker()
+        self.format_worker.finished.connect(self.on_formats_loaded)
+        self.format_worker.start()
 
     def load_tournaments(self):
-        reg = self.combo_format.currentData()
+        text = self.combo_format.currentText().strip()
+        idx = self.combo_format.findText(text)
+        if idx >= 0:
+            reg = self.combo_format.itemData(idx)
+        else:
+            reg = text
+            
+        if text == "Tutti":
+            reg = ""
+            
         count = self.spin_count.value()
             
         self.btn_refresh.setEnabled(False)

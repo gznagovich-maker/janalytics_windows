@@ -24,6 +24,8 @@ from typing import Dict, Optional
 from database.connection import SessionLocal
 from database.models_v2 import Tag, MoveTag, AbilityTag, ItemTag, MoveV2, AbilityV2, ItemV2
 from database.tag_definitions import TAGS, MOVE_TAG_MAP, ABILITY_TAG_MAP, ITEM_TAG_MAP
+from database.seed_v2_metadata import js_to_dict
+from database.tag_heuristics import classify_item, classify_ability
 
 
 def to_id(text: str) -> str:
@@ -126,6 +128,18 @@ def seed_move_tags(session, tag_name_to_id: Dict[str, int]):
 def seed_ability_tags(session, tag_name_to_id: Dict[str, int]):
     """Assegna tag alle abilità presenti in ability_v2."""
     print("[SEED] Seeding ability_tag...")
+    
+    abilities_json_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "abilities.js"
+    )
+    abilities_data: Dict = {}
+    if os.path.exists(abilities_json_path):
+        with open(abilities_json_path, "r", encoding="utf-8") as f:
+            abilities_data = js_to_dict(f.read())
+    else:
+        print(f"[SEED] WARN: abilities.js non trovato in {abilities_json_path}")
+
     count = 0
 
     abilities_in_db = session.query(AbilityV2).all()
@@ -138,6 +152,11 @@ def seed_ability_tags(session, tag_name_to_id: Dict[str, int]):
             if to_id(map_key) == ability_id:
                 tags_to_assign.update(map_tags)
                 break
+                
+        ability_json = abilities_data.get(ability_id, {})
+        if ability_json:
+            heuristic_tags = classify_ability(ability_json)
+            tags_to_assign.update(heuristic_tags)
 
         for tag_name in tags_to_assign:
             tag_id = tag_name_to_id.get(tag_name)
@@ -162,6 +181,18 @@ def seed_ability_tags(session, tag_name_to_id: Dict[str, int]):
 def seed_item_tags(session, tag_name_to_id: Dict[str, int]):
     """Assegna tag agli strumenti presenti in item_v2."""
     print("[SEED] Seeding item_tag...")
+    
+    items_json_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "items.js"
+    )
+    items_data: Dict = {}
+    if os.path.exists(items_json_path):
+        with open(items_json_path, "r", encoding="utf-8") as f:
+            items_data = js_to_dict(f.read())
+    else:
+        print(f"[SEED] WARN: items.js non trovato in {items_json_path}")
+
     count = 0
 
     items_in_db = session.query(ItemV2).all()
@@ -174,6 +205,11 @@ def seed_item_tags(session, tag_name_to_id: Dict[str, int]):
             if to_id(map_key) == item_id:
                 tags_to_assign.update(map_tags)
                 break
+                
+        item_json = items_data.get(item_id, {})
+        if item_json:
+            heuristic_tags = classify_item(item_json)
+            tags_to_assign.update(heuristic_tags)
 
         for tag_name in tags_to_assign:
             tag_id = tag_name_to_id.get(tag_name)
@@ -217,10 +253,10 @@ def run_full_seed():
         seed_move_tags(session, tag_map)
         seed_ability_tags(session, tag_map)
         seed_item_tags(session, tag_map)
-        print("[SEED] ✅ Seeding completato.")
+        print("[SEED] Seeding completato con successo.")
     except Exception as e:
         session.rollback()
-        print(f"[SEED] ❌ Errore durante il seeding: {e}")
+        print(f"[SEED] Errore durante il seeding: {e}")
         raise
     finally:
         session.close()

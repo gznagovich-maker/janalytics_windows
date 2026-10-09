@@ -198,11 +198,6 @@ class VariantBuildsWidget(QWidget):
                 col = 0
                 row += 1
                 
-    def on_copy_paste_clicked(self):
-        if self.current_most_common_paste:
-            from PySide6.QtWidgets import QApplication
-            QApplication.clipboard().setText(self.current_most_common_paste.strip())
-            
         # --- TABELLA MATCHUP ---
         from collections import defaultdict
         from src.analytics.archetypes import get_match_team_archetypes
@@ -345,6 +340,11 @@ class VariantBuildsWidget(QWidget):
         
         layout.addStretch()
         return frame
+
+    def on_copy_paste_clicked(self):
+        if self.current_most_common_paste:
+            from PySide6.QtWidgets import QApplication
+            QApplication.clipboard().setText(self.current_most_common_paste.strip())
 
     def on_import_clicked(self):
         if self.current_most_common_paste:

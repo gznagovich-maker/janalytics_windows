@@ -34,6 +34,10 @@ from views.home_view import HomeWidget
 from views.build_and_compare_view import BuildAndCompareWidget
 from views.team_optimizer_view import TeamOptimizerView
 from views.bulk_optimizer_view import BulkOptimizerView
+from views.offense_optimizer_view import OffenseOptimizerView
+from views.team_builder_view import TeamBuilderView
+from views.gsheet_import_view import GSheetImportWidget
+from views.sheet_dashboard_view import SheetDashboardView
 from widgets.loading_overlay import LoadingOverlay
 
 
@@ -302,18 +306,48 @@ class MainWindow(QMainWindow):
             "resources/icons/puzzle-piece-hover.svg"
         )
         
-        self.btn_nav_optimizer = AnimatedMenuButton(" Ottimizzazione Team")
+        self.btn_nav_optimizer = AnimatedMenuButton(" Bulk Optimizer")
         self.btn_nav_optimizer.setIcons(
             "resources/icons/sparkles.svg",
             "resources/icons/sparkles-hover.svg"
         )
-        self.btn_nav_optimizer.clicked.connect(self.show_team_optimizer)
+        self.btn_nav_optimizer.clicked.connect(self.show_bulk_optimizer)
+        
+        self.btn_nav_offense = AnimatedMenuButton(" Offense Optimizer")
+        self.btn_nav_offense.setIcons(
+            "resources/icons/swords.svg", # fallback a un'icona esistente (magari sparkles se swords non c'è, useremo un'altra o la default)
+            "resources/icons/swords-hover.svg"
+        )
+        self.btn_nav_offense.clicked.connect(self.show_offense_optimizer)
+
+        self.btn_nav_team_builder = AnimatedMenuButton(" Team Builder")
+        self.btn_nav_team_builder.setIcons(
+            "resources/icons/puzzle-piece.svg",
+            "resources/icons/puzzle-piece-hover.svg"
+        )
+        self.btn_nav_team_builder.clicked.connect(self.show_team_builder)
+
+        self.btn_nav_gsheet_import = AnimatedMenuButton(" VGCPastes Import")
+        self.btn_nav_gsheet_import.setIcons(
+            "resources/icons/arrow-down-on-square-stack.svg",
+            "resources/icons/arrow-down-on-square-stack-hover.svg"
+        )
+        self.btn_nav_gsheet_import.clicked.connect(self.show_gsheet_import)
+
+        self.btn_nav_sheet_dashboard = AnimatedMenuButton(" Sheet Dashboard")
+        self.btn_nav_sheet_dashboard.setIcons(
+            "resources/icons/chart-bar.svg",
+            "resources/icons/chart-bar-hover.svg"
+        )
+        self.btn_nav_sheet_dashboard.clicked.connect(self.show_sheet_dashboard)
 
 
         self.nav_buttons = [
             self.btn_nav_list, self.btn_nav_import, self.btn_nav_mass_import, 
             self.btn_nav_meta_stats, self.btn_nav_core_analysis, 
-            self.btn_nav_team_analysis, self.btn_nav_limitless, self.btn_nav_build_compare, self.btn_nav_optimizer
+            self.btn_nav_team_analysis, self.btn_nav_limitless, self.btn_nav_build_compare,
+            self.btn_nav_optimizer, self.btn_nav_offense, self.btn_nav_team_builder,
+            self.btn_nav_gsheet_import, self.btn_nav_sheet_dashboard
         ]
         for btn in self.nav_buttons:
             btn.setCheckable(True)
@@ -370,6 +404,13 @@ class MainWindow(QMainWindow):
         self.limitless_detail_view = LimitlessTournamentDetailWidget(self)
         self.build_compare_view = BuildAndCompareWidget()
         self.team_optimizer_view = TeamOptimizerView(self)
+        self.bulk_optimizer_view = BulkOptimizerView(self)
+        self.offense_optimizer_view = OffenseOptimizerView(self)
+        self.team_builder_view = TeamBuilderView(self)
+        self.gsheet_import_view = GSheetImportWidget(self)
+        self.sheet_dashboard_view = SheetDashboardView(self)
+        # Vista a cui torna il pulsante "Indietro" del visualizzatore replay
+        self._detail_return_view = None
         
         # Connetti segnali build
         self.team_analysis_view.show_builds_signal.connect(self.show_variant_builds)
@@ -394,17 +435,24 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.variant_builds_view)
         self.stack.addWidget(self.build_compare_view)
         self.stack.addWidget(self.team_optimizer_view)
+        self.stack.addWidget(self.bulk_optimizer_view)
+        self.stack.addWidget(self.offense_optimizer_view)
+        self.stack.addWidget(self.team_builder_view)
         self.stack.addWidget(self.limitless_tournaments_view)
         self.stack.addWidget(self.limitless_detail_view)
+        self.stack.addWidget(self.gsheet_import_view)
+        self.stack.addWidget(self.sheet_dashboard_view)
         self.stack.addWidget(self.home_view)
 
 
         # Signal connections
         self.list_view.replay_selected.connect(self.show_detail_view)
-        self.detail_view.back_requested.connect(self.show_list_view)
+        self.detail_view.back_requested.connect(self._on_detail_back)
         self.detail_view.link_clicked.connect(self.navigate_to_catalog)
         self.detail_view.title_changed.connect(self.lbl_global_title.setText)
         self.move_detail_view.back_requested.connect(self.go_back)
+        # Override link replay del foglio → visualizzatore interno
+        self.sheet_dashboard_view.replay_requested.connect(self.show_replay_from_dashboard)
 
         container = QWidget()
         container.setLayout(main_layout)
@@ -420,7 +468,7 @@ class MainWindow(QMainWindow):
 
         # Connessioni dei segnali tra schermate
         self.list_view.replay_selected.connect(self.show_detail_view)
-        self.detail_view.back_requested.connect(self.show_list_view)
+        self.detail_view.back_requested.connect(self._on_detail_back)
         self.limitless_tournaments_view.tournament_selected.connect(self.show_limitless_detail)
         self.limitless_detail_view.back_requested.connect(self.show_limitless_tournaments)
 
@@ -510,6 +558,7 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentWidget(self.list_view)
 
     def show_detail_view(self, match_id: str):
+        self._detail_return_view = None
         self.update_nav_buttons(None)
         self.lbl_global_title.setText("Dettaglio Match")
         self.detail_view.display_match(match_id)
@@ -537,9 +586,39 @@ class MainWindow(QMainWindow):
         self.team_optimizer_view.tabs.setCurrentIndex(0)
         
     def show_bulk_optimizer(self):
-        self.stack.setCurrentWidget(self.team_optimizer_view)
+        self.stack.setCurrentWidget(self.bulk_optimizer_view)
         self.update_nav_buttons(self.btn_nav_optimizer)
-        self.team_optimizer_view.tabs.setCurrentIndex(1)
+
+    def show_offense_optimizer(self):
+        self.stack.setCurrentWidget(self.offense_optimizer_view)
+        self.update_nav_buttons(self.btn_nav_offense)
+
+    def show_team_builder(self):
+        self.stack.setCurrentWidget(self.team_builder_view)
+        self.update_nav_buttons(self.btn_nav_team_builder)
+        self.lbl_global_title.setText("Team Builder")
+
+    def show_gsheet_import(self):
+        self.stack.setCurrentWidget(self.gsheet_import_view)
+        self.update_nav_buttons(self.btn_nav_gsheet_import)
+        self.lbl_global_title.setText("VGCPastes Import")
+
+    def show_sheet_dashboard(self):
+        self.stack.setCurrentWidget(self.sheet_dashboard_view)
+        self.update_nav_buttons(self.btn_nav_sheet_dashboard)
+        self.lbl_global_title.setText("Sheet Dashboard")
+
+    def show_replay_from_dashboard(self, match_id: str):
+        """Apre un replay del Google Sheet nel visualizzatore interno."""
+        self.show_detail_view(match_id)
+        self._detail_return_view = self.sheet_dashboard_view
+
+    def _on_detail_back(self):
+        if self._detail_return_view is self.sheet_dashboard_view:
+            self._detail_return_view = None
+            self.show_sheet_dashboard()
+        elif self.stack.currentWidget() is self.detail_view:
+            self.show_list_view()
 
     def handle_variant_import(self, paste_text: str):
         self.build_compare_view.txt_paste.setPlainText(paste_text)

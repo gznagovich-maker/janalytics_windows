@@ -43,6 +43,7 @@ class Palette:
     DANGER      = "#8A3838"   # Rosso desaturato — azioni distruttive
     DANGER_BRIGHT = "#B04545"  # Rosso hover
     SUCCESS     = "#3D6B50"   # Verde scuro — feedback positivo
+    SUCCESS_BRIGHT = "#5FA77C"  # Verde leggibile su nero — testo vittorie
     WARNING     = "#8A6830"   # Bronzo scuro — avvertimento
 
     # --- Chart Bar Colors (Goodra palette, desaturated for data viz) ---

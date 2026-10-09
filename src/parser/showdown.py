@@ -179,6 +179,21 @@ class ShowdownParser:
             if p_id in self.match.players and slot_id in self.match.players[p_id].active_pokemon:
                 self.match.players[p_id].active_pokemon[slot_id].tera_type = tera_type
 
+        elif tag == 'move':
+            slot_raw = parts[2]
+            slot_id = slot_raw.split(':')[0]
+            p_id = slot_id[:2]
+            move_name = parts[3]
+            
+            if not move_name.startswith('Z-') and move_name not in ('Struggle', 'Confusion', 'recharge'):
+                if p_id in self.match.players and slot_id in self.match.players[p_id].active_pokemon:
+                    species = self.match.players[p_id].active_pokemon[slot_id].species
+                    for pkmn in self.match.players[p_id].team:
+                        if pkmn.species == species:
+                            if move_name not in pkmn.moves:
+                                pkmn.moves.append(move_name)
+                            break
+
         self.last_action = ActionFactory.create(tag, parts, self.match.global_state)
         self.match.turns[self.current_turn].append(self.last_action)
 

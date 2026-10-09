@@ -29,22 +29,32 @@ class BulkOptimizerWorker(QThread):
     finished = Signal(list) # list of (pokemon_idx, best_spread, report, status_msg)
     error = Signal(str)
 
-    def __init__(self, team_members: list, selected_indices: list, budget: int, format_name: str, top_n: int, screens: dict = None):
+    def __init__(self, team_members: list, selected_indices: list, budget: int, target_source: str, format_name: str = "", top_n: int = 20, paste_targets: str = "", screens: dict = None, vgcpaste_threats: list = None, is_static_mode: bool = False):
         super().__init__()
         self.team_members = team_members
         self.selected_indices = selected_indices
         self.budget = budget
+        self.target_source = target_source
         self.format_name = format_name
         self.top_n = top_n
+        self.paste_targets = paste_targets
         self.screens = screens or {}
+        self.vgcpaste_threats = vgcpaste_threats or []
+        self.is_static_mode = is_static_mode
 
     def run(self):
         try:
             self.progress.emit(10, "Estrazione Meta Threats...")
-            meta_pool = BatchGeneratorService.generate_threats_from_format(self.format_name, 1.0, top_n_species=self.top_n)
+            
+            if self.target_source == "meta":
+                meta_pool = BatchGeneratorService.generate_threats_from_format(self.format_name, 1.0, top_n_species=self.top_n)
+            elif self.target_source == "vgcpaste":
+                meta_pool = self.vgcpaste_threats
+            else:
+                meta_pool = BatchGeneratorService.generate_threats_from_paste(self.paste_targets)
             
             if not meta_pool:
-                self.error.emit(f"Nessun dato meta trovato per il formato {self.format_name}.")
+                self.error.emit("Nessun bersaglio valido trovato.")
                 return
                 
             self.progress.emit(20, "Inizializzazione Motore Smogon...")
@@ -71,7 +81,7 @@ class BulkOptimizerWorker(QThread):
                     self.progress.emit(base + step, f"Ottimizzazione in corso per {m.species}...")
                     
                 best_spread, report, status_msg = optimizer.optimize_pokemon_bulk(
-                    target_pokemon, meta_pool, budget=self.budget, report_limit=self.top_n, progress_callback=cb_prog, screens=self.screens
+                    target_pokemon, meta_pool, budget=self.budget, report_limit=self.top_n, progress_callback=cb_prog, screens=self.screens, is_static_mode=self.is_static_mode
                 )
                 
                 results.append((p_idx, best_spread, report, status_msg))
@@ -114,11 +124,20 @@ class BulkOptimizerView(QWidget):
         self.paste_input.setStyleSheet(f"background: {Palette.BG_APP}; color: {Palette.TEXT_PRIMARY}; border: 1px solid {Palette.BORDER_COLOR};")
         left_panel.addWidget(self.paste_input)
         
+        h_buttons = QHBoxLayout()
         self.btn_parse = QPushButton("Analizza Team")
         self.btn_parse.setCursor(Qt.PointingHandCursor)
         self.btn_parse.setStyleSheet(f"background-color: {Palette.PRIMARY}; color: {Palette.BG_APP}; font-weight: bold; padding: 8px;")
         self.btn_parse.clicked.connect(self._parse_paste)
-        left_panel.addWidget(self.btn_parse)
+        h_buttons.addWidget(self.btn_parse)
+
+        self.btn_load_vgcpaste = QPushButton("Carica da VGCPastes")
+        self.btn_load_vgcpaste.setCursor(Qt.PointingHandCursor)
+        self.btn_load_vgcpaste.setStyleSheet(f"background-color: {Palette.SECONDARY}; color: {Palette.BG_APP}; font-weight: bold; padding: 8px;")
+        self.btn_load_vgcpaste.clicked.connect(self._load_vgcpaste_team)
+        h_buttons.addWidget(self.btn_load_vgcpaste)
+        
+        left_panel.addLayout(h_buttons)
         
         # Pokemon Selection
         self.pokemon_list_frame = QFrame()
@@ -127,34 +146,96 @@ class BulkOptimizerView(QWidget):
         self.pokemon_list_layout.addWidget(QLabel("Seleziona i Pokémon da ottimizzare:"))
         left_panel.addWidget(self.pokemon_list_frame)
         
-        # EV Config
-        config_frame = QFrame()
-        config_frame.setStyleSheet(f"background: {Palette.BG_SURFACE_ELEVATED}; border: 1px solid {Palette.BORDER_COLOR}; border-radius: 6px;")
-        config_layout = QVBoxLayout(config_frame)
-        config_layout.addWidget(QLabel("Configurazione Ottimizzazione (Regole AOB):"))
-        
+        from PySide6.QtWidgets import QRadioButton, QButtonGroup
+        # Targets Config
+        targets_frame = QFrame()
+        targets_frame.setStyleSheet(f"background: {Palette.BG_SURFACE_ELEVATED}; border: 1px solid {Palette.BORDER_COLOR}; border-radius: 6px;")
+        targets_layout = QVBoxLayout(targets_frame)
+        targets_layout.addWidget(QLabel("Sorgente Bersagli:"))
+
+        self.rb_meta = QRadioButton("Top N Meta Threats")
+        self.rb_meta.setChecked(True)
+        self.rb_paste = QRadioButton("Team Avversario (Showdown Paste)")
+        self.rb_vgcpaste = QRadioButton("VGCPastes Import")
+
+        self.bg_targets = QButtonGroup()
+        self.bg_targets.addButton(self.rb_meta)
+        self.bg_targets.addButton(self.rb_paste)
+        self.bg_targets.addButton(self.rb_vgcpaste)
+
+        targets_layout.addWidget(self.rb_meta)
+        targets_layout.addWidget(self.rb_paste)
+        targets_layout.addWidget(self.rb_vgcpaste)
+
+        # VGCPaste info label
+        self.vgcpaste_info_widget = QWidget()
+        vgcpaste_info_layout = QVBoxLayout(self.vgcpaste_info_widget)
+        vgcpaste_info_layout.setContentsMargins(0, 0, 0, 0)
+        self.lbl_vgcpaste_count = QLabel("Nessun team importato. Importa prima dalla sezione VGCPastes.")
+        self.lbl_vgcpaste_count.setStyleSheet(f"color: {Palette.TEXT_MUTED}; font-size: 12px;")
+        self.lbl_vgcpaste_count.setWordWrap(True)
+        vgcpaste_info_layout.addWidget(self.lbl_vgcpaste_count)
+        targets_layout.addWidget(self.vgcpaste_info_widget)
+        self.vgcpaste_info_widget.hide()
+
+        # Meta Config Widget
+        self.meta_config_widget = QWidget()
+        meta_layout = QVBoxLayout(self.meta_config_widget)
+        meta_layout.setContentsMargins(0, 0, 0, 0)
         h_format = QHBoxLayout()
         h_format.addWidget(QLabel("Formato Meta:"))
         self.cb_format = QComboBox()
         self.cb_format.addItems(BatchGeneratorService.get_available_formats())
         h_format.addWidget(self.cb_format)
-        config_layout.addLayout(h_format)
+        meta_layout.addLayout(h_format)
+
+        h_topn = QHBoxLayout()
+        h_topn.addWidget(QLabel("Top N minacce:"))
+        self.spin_topn = QSpinBox()
+        self.spin_topn.setRange(1, 100)
+        self.spin_topn.setValue(20)
+        h_topn.addWidget(self.spin_topn)
+        meta_layout.addLayout(h_topn)
+        targets_layout.addWidget(self.meta_config_widget)
+
+        # Paste Config Widget
+        self.paste_config_widget = QWidget()
+        paste_layout = QVBoxLayout(self.paste_config_widget)
+        paste_layout.setContentsMargins(0, 0, 0, 0)
+        self.paste_targets_input = QTextEdit()
+        self.paste_targets_input.setPlaceholderText("Incolla qui il team bersaglio...")
+        self.paste_targets_input.setMaximumHeight(100)
+        self.paste_targets_input.setStyleSheet(f"background: {Palette.BG_APP}; color: {Palette.TEXT_PRIMARY}; border: 1px solid {Palette.BORDER_COLOR};")
+        paste_layout.addWidget(self.paste_targets_input)
+        targets_layout.addWidget(self.paste_config_widget)
+
+        self.paste_config_widget.hide()
+        self.rb_meta.toggled.connect(self._toggle_targets)
+        self.rb_paste.toggled.connect(self._toggle_targets)
+        self.rb_vgcpaste.toggled.connect(self._toggle_targets)
+
+        left_panel.addWidget(targets_frame)
+        
+        # EV Config
+        config_frame = QFrame()
+        config_frame.setStyleSheet(f"background: {Palette.BG_SURFACE_ELEVATED}; border: 1px solid {Palette.BORDER_COLOR}; border-radius: 6px;")
+        config_layout = QVBoxLayout(config_frame)
+        config_layout.addWidget(QLabel("Configurazione Ottimizzazione (Regole AOB):"))
+
+        h_mode = QHBoxLayout()
+        h_mode.addWidget(QLabel("Modalità Calcolo:"))
+        self.cb_mode = QComboBox()
+        self.cb_mode.addItems(["Ottimizzazione Algoritmica (Ricerca della miglior spread)", "Calcolo Statico (Usa EVs esatti dal paste incollato)"])
+        h_mode.addWidget(self.cb_mode)
+        config_layout.addLayout(h_mode)
         
         h_budget = QHBoxLayout()
         h_budget.addWidget(QLabel("Budget EV per il Bulk:"))
         self.spin_budget = QSpinBox()
-        self.spin_budget.setRange(0, 508) # Manteniamo il range max per flessibilità, ma cambiamo il default
-        self.spin_budget.setValue(66) # Default reasonable budget
+        self.spin_budget.setRange(0, 508)
+        self.spin_budget.setValue(66)
         h_budget.addWidget(self.spin_budget)
         config_layout.addLayout(h_budget)
-        
-        h_topn = QHBoxLayout()
-        h_topn.addWidget(QLabel("Simula contro le Top N minacce:"))
-        self.spin_topn = QSpinBox()
-        self.spin_topn.setRange(1, 100)
-        self.spin_topn.setValue(20) # Top 20 is a good baseline
-        h_topn.addWidget(self.spin_topn)
-        config_layout.addLayout(h_topn)
         
         # Screens Config
         h_screens = QHBoxLayout()
@@ -206,6 +287,16 @@ class BulkOptimizerView(QWidget):
         
         main_layout.addLayout(split_layout)
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        current = self.cb_format.currentText()
+        self.cb_format.clear()
+        self.cb_format.addItems(BatchGeneratorService.get_available_formats())
+        if current:
+            idx = self.cb_format.findText(current)
+            if idx >= 0:
+                self.cb_format.setCurrentIndex(idx)
+
     def _parse_paste(self):
         text = self.paste_input.toPlainText().strip()
         if not text:
@@ -231,17 +322,130 @@ class BulkOptimizerView(QWidget):
             
         self.btn_start.setEnabled(True)
 
+    def _toggle_targets(self):
+        is_meta = self.rb_meta.isChecked()
+        is_vgcpaste = self.rb_vgcpaste.isChecked()
+        self.meta_config_widget.setVisible(is_meta)
+        self.paste_config_widget.setVisible(not is_meta and not is_vgcpaste)
+        self.vgcpaste_info_widget.setVisible(is_vgcpaste)
+        if is_vgcpaste:
+            self._update_vgcpaste_count()
+
+    def _update_vgcpaste_count(self):
+        imported = self._get_vgcpaste_imported_teams()
+        self.lbl_vgcpaste_count.setText(f"{len(imported)} team importati disponibili." if imported else "Nessun team importato. Vai alla sezione VGCPastes Import.")
+
+    def _get_vgcpaste_imported_teams(self):
+        if hasattr(self.parent_main, "gsheet_import_view"):
+            return self.parent_main.gsheet_import_view.get_imported_teams()
+        return []
+
+    def _load_vgcpaste_team(self):
+        from PySide6.QtWidgets import QMenu
+        from PySide6.QtGui import QCursor
+        
+        imported_teams = self._get_vgcpaste_imported_teams()
+        if not imported_teams:
+            QMessageBox.warning(self, "Attenzione", "Nessun team importato. Vai alla sezione VGCPastes Import e carica dei team.")
+            return
+            
+        menu = QMenu(self)
+        for team in imported_teams:
+            action = menu.addAction(team.team_name)
+            action.setData(team)
+            
+        action = menu.exec(QCursor.pos())
+        if action:
+            team = action.data()
+            self._paste_imported_team(team)
+            
+    def _paste_imported_team(self, team):
+        paste_text = ""
+        for member in team.members:
+            header = member.species.capitalize()
+            if member.item:
+                header += f" @ {member.item}"
+            paste_text += f"{header}\n"
+            
+            if member.ability:
+                paste_text += f"Ability: {member.ability}\n"
+                
+            paste_text += f"Level: 50\n"
+            
+            if member.tera_type:
+                paste_text += f"Tera Type: {member.tera_type}\n"
+            
+            if member.evs:
+                ev_strings = []
+                for k, v in member.evs.items():
+                    if v > 0:
+                        ev_strings.append(f"{v} {k.title()}")
+                if ev_strings:
+                    paste_text += f"EVs: {' / '.join(ev_strings)}\n"
+                    
+            if member.ivs:
+                iv_strings = []
+                for k, v in member.ivs.items():
+                    if v < 31:
+                        iv_strings.append(f"{v} {k.title()}")
+                if iv_strings:
+                    paste_text += f"IVs: {' / '.join(iv_strings)}\n"
+                    
+            if member.nature:
+                paste_text += f"{member.nature} Nature\n"
+                
+            for m in member.moves:
+                if m:
+                    paste_text += f"- {m}\n"
+                    
+            paste_text += "\n"
+            
+        self.paste_input.setPlainText(paste_text.strip())
+        self._parse_paste()
+
     def _start_optimization(self):
         selected_indices = [idx for idx, cb in self.checkboxes if cb.isChecked()]
         if not selected_indices:
             QMessageBox.warning(self, "Attenzione", "Seleziona almeno un Pokémon da ottimizzare.")
             return
             
+        is_meta = self.rb_meta.isChecked()
+        is_vgcpaste = self.rb_vgcpaste.isChecked()
         format_name = self.cb_format.currentText()
-        if not format_name:
+        
+        if is_meta and not format_name:
             QMessageBox.warning(self, "Attenzione", "Nessun formato Meta selezionato.")
             return
             
+        paste_targets = self.paste_targets_input.toPlainText().strip()
+        if not is_meta and not is_vgcpaste and not paste_targets:
+            QMessageBox.warning(self, "Attenzione", "Incolla il team bersaglio.")
+            return
+
+        # Pre-generate vgcpaste threats if needed
+        vgcpaste_threats = []
+        if is_vgcpaste:
+            imported = self._get_vgcpaste_imported_teams()
+            if not imported:
+                QMessageBox.warning(
+                    self, "Attenzione",
+                    "Nessun team importato dalla sezione VGCPastes.\n"
+                    "Importa prima i team dalla sezione VGCPastes Import."
+                )
+                return
+            vgcpaste_threats = BatchGeneratorService.generate_threats_from_vgcpaste_imports(imported)
+            if not vgcpaste_threats:
+                QMessageBox.warning(self, "Attenzione", "Nessun bersaglio valido trovato nei team VGCPastes.")
+                return
+
+        # Determine target source
+        if is_meta:
+            target_source = "meta"
+        elif is_vgcpaste:
+            target_source = "vgcpaste"
+        else:
+            target_source = "paste"
+
         self.parent_main.show_loading("Inizializzazione Ottimizzatore Bulk...")
         self.btn_start.setEnabled(False)
         self.btn_parse.setEnabled(False)
@@ -265,9 +469,13 @@ class BulkOptimizerView(QWidget):
             team_members=self.parsed_members,
             selected_indices=selected_indices,
             budget=self.spin_budget.value(),
+            target_source=target_source,
             format_name=format_name,
             top_n=self.spin_topn.value(),
-            screens=screens
+            paste_targets=paste_targets,
+            screens=screens,
+            vgcpaste_threats=vgcpaste_threats,
+            is_static_mode=(self.cb_mode.currentIndex() == 1)
         )
         self.worker.progress.connect(self._update_progress)
         self.worker.finished.connect(self._on_finished)
