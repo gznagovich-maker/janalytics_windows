@@ -69,6 +69,33 @@ class SheetData:
 # ── Dati estratti dai log dei replay ──────────────────────────────
 
 @dataclass
+class KoEvent:
+    """KO subito da un Pokémon di questo lato."""
+    victim: str                                       # Specie + Forma
+    turn: int = 0
+    killer: Optional[str] = None                      # Pokémon avversario (Specie + Forma)
+    move: Optional[str] = None                        # mossa del colpo finale
+    indirect: bool = False                            # meteo, veleno, rinculo, item...
+    source: str = ""                                  # es. "item: Life Orb", "psn"
+
+
+@dataclass
+class SwitchInEvent:
+    """Ingresso volontario in campo (hard switch o pivot) e danni del turno."""
+    pokemon: str
+    turn: int = 0
+    kind: str = "hard"                                # "hard" | "pivot"
+    replaced: Optional[str] = None                    # chi è uscito dallo slot
+    hp_before: float = 100.0                          # HP % all'ingresso
+    hp_end: float = 100.0                             # HP % a fine turno (0 se KO)
+    hits: List[Tuple[str, str]] = field(default_factory=list)  # (attaccante, mossa)
+
+    @property
+    def hp_lost(self) -> float:
+        return max(0.0, self.hp_before - self.hp_end)
+
+
+@dataclass
 class SideData:
     """Dati di un lato (p1/p2) estratti da un log Showdown."""
     slot: str
@@ -81,6 +108,8 @@ class SideData:
     mega_forme: Optional[str] = None                  # es. "Garchomp-Mega-Z"
     showteam: bool = False                            # team sheet aperto (OTS)
     moves: Dict[str, Counter] = field(default_factory=dict)  # chiave -> Counter(mossa)
+    kos_suffered: List[KoEvent] = field(default_factory=list)
+    switch_ins: List[SwitchInEvent] = field(default_factory=list)
 
 
 @dataclass

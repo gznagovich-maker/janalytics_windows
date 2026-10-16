@@ -19,7 +19,7 @@ Identità Pokémon sempre "Specie + Forma" (vedi replay_resolver).
 from typing import Dict, List, Optional
 
 from PySide6.QtCharts import QChart, QChartView, QPieSeries
-from PySide6.QtCore import QMargins, QObject, QSettings, Qt, Signal
+from PySide6.QtCore import QMargins, QObject, QSettings, Qt, Signal, QThread
 from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QFrame, QGraphicsOpacityEffect,
@@ -32,6 +32,8 @@ from config.theme import Fonts, Palette, Spacing
 from src.domain.sheet_dashboard import dashboard_stats as ds
 from src.domain.sheet_dashboard.dashboard_worker import ReplayImportWorker, SheetDashboardWorker
 from src.domain.sheet_dashboard.models import DashboardData, DashboardGame, MoveUsageChart
+from src.domain.sheet_dashboard import meta_damage_calc as mdc
+from src.domain.team_builder_service import TeamMember
 from src.utils.icon_utils import get_pokemon_icon_path
 
 # ── Stili condivisi ───────────────────────────────────────────────
@@ -867,6 +869,300 @@ class GameByGameTab(QWidget):
 
 # ── Vista principale ──────────────────────────────────────────────
 
+
+
+# ── 5. Damage vs Meta (Top 40) ────────────────────────────────────
+
+class MetaDamageCalcWorker(QThread):
+    finished_ok = Signal(object)  # dict {attacker_name: TeamMemberDamageReport}
+    failed = Signal(str)
+
+    def __init__(self, team_members: List[TeamMember], threats: List[mdc.TargetThreat], parent=None):
+        super().__init__(parent)
+        self.team_members = team_members
+        self.threats = threats
+
+    def run(self):
+        try:
+            reports = {}
+            for member in self.team_members:
+                rep = mdc.calculate_damage_for_attacker(member, self.threats)
+                reports[member.species] = rep
+            self.finished_ok.emit(reports)
+        except Exception as e:
+            self.failed.emit(str(e))
+
+
+class MetaDamageCalcTab(QWidget):
+    def __init__(self):
+        super().__init__()
+        self._games: List[DashboardGame] = []
+        self._team_paste: str = ""
+        self._team_members: List[TeamMember] = []
+        self._threats: List[mdc.TargetThreat] = []
+        self._reports: Dict[str, mdc.TeamMemberDamageReport] = {}
+        self._worker: Optional[MetaDamageCalcWorker] = None
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, Spacing.SM, 0, 0)
+        layout.setSpacing(Spacing.MD)
+
+        # Barra superiore: Controlli e impostazioni
+        top_bar = QFrame()
+        top_bar.setStyleSheet(_CARD_QSS)
+        top_layout = QVBoxLayout(top_bar)
+        top_layout.setContentsMargins(Spacing.MD, Spacing.SM, Spacing.MD, Spacing.SM)
+        top_layout.setSpacing(Spacing.SM)
+
+        row1 = QHBoxLayout()
+        row1.addWidget(_label("Top N Bersagli Meta (Replay):"))
+        self.spin_top_n = QSpinBox()
+        self.spin_top_n.setRange(5, 100)
+        self.spin_top_n.setValue(40)
+        self.spin_top_n.setStyleSheet(_COMBO_QSS)
+        self.spin_top_n.setFixedWidth(70)
+        row1.addWidget(self.spin_top_n)
+
+        row1.addSpacing(Spacing.LG)
+        row1.addWidget(_label("Seleziona Pokémon del tuo Team:"))
+        self.combo_attacker = QComboBox()
+        self.combo_attacker.setStyleSheet(_COMBO_QSS)
+        self.combo_attacker.setMinimumWidth(180)
+        self.combo_attacker.currentIndexChanged.connect(self._on_attacker_changed)
+        row1.addWidget(self.combo_attacker)
+
+        row1.addStretch()
+        self.btn_recalc = QPushButton("Ricalcola Danni")
+        self.btn_recalc.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_recalc.setStyleSheet(_BTN_QSS)
+        self.btn_recalc.clicked.connect(self._start_calc)
+        row1.addWidget(self.btn_recalc)
+
+        top_layout.addLayout(row1)
+
+        # Riga PokePaste
+        row2 = QHBoxLayout()
+        row2.addWidget(_label("Team Paste / URL:"))
+        self.edit_paste = QLineEdit()
+        self.edit_paste.setPlaceholderText("Incolla qui l'URL di Pokepaste o il testo del team se non presente in 'Home'...")
+        self.edit_paste.setStyleSheet(_COMBO_QSS)
+        row2.addWidget(self.edit_paste, 1)
+
+        self.btn_load_paste = QPushButton("Aggiorna Team")
+        self.btn_load_paste.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_load_paste.setStyleSheet(_BTN_QSS)
+        self.btn_load_paste.clicked.connect(self._on_update_team_clicked)
+        row2.addWidget(self.btn_load_paste)
+
+        top_layout.addLayout(row2)
+        layout.addWidget(top_bar)
+
+        # KPI Dashboard Cards
+        kpi_frame = QHBoxLayout()
+        kpi_frame.setSpacing(Spacing.MD)
+
+        def _make_kpi(label: str, color: str):
+            box = QFrame()
+            box.setStyleSheet(_CARD_QSS)
+            box.setFixedHeight(75)
+            bl = QVBoxLayout(box)
+            bl.setContentsMargins(12, 6, 12, 6)
+            bl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            val_lbl = _label("—", f"font-size: 22px; font-weight: {Fonts.WEIGHT_BOLD}; color: {color};")
+            val_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            txt_lbl = _label(label, _MUTED_QSS)
+            txt_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            bl.addWidget(val_lbl)
+            bl.addWidget(txt_lbl)
+            return box, val_lbl
+
+        self.kpi_total_box, self.kpi_total_val = _make_kpi("Bersagli Meta Analizzati", Palette.TEXT_PRIMARY)
+        self.kpi_ohko_box, self.kpi_ohko_val = _make_kpi("1HKO (K.O. in 1 colpo)", Palette.SUCCESS)
+        self.kpi_twohko_box, self.kpi_twohko_val = _make_kpi("2HKO (K.O. in 2 colpi)", Palette.PRIMARY)
+        self.kpi_threehko_box, self.kpi_threehko_val = _make_kpi("3+ HKO / Resistenti", Palette.DANGER)
+
+        kpi_frame.addWidget(self.kpi_total_box)
+        kpi_frame.addWidget(self.kpi_ohko_box)
+        kpi_frame.addWidget(self.kpi_twohko_box)
+        kpi_frame.addWidget(self.kpi_threehko_box)
+        layout.addLayout(kpi_frame)
+
+        # Tabella Risultati Dettagliata
+        self.table_threats = QTableWidget(0, 7)
+        self.table_threats.setHorizontalHeaderLabels([
+            "Difensore Meta", "Presenza nei Replay", "Speed Tier (L.50)",
+            "Mossa Migliore", "Danno Min %", "Danno Max %", "KO Tier"
+        ])
+        self.table_threats.setStyleSheet(_TABLE_QSS)
+        self.table_threats.verticalHeader().setVisible(False)
+        self.table_threats.verticalHeader().setDefaultSectionSize(48)
+        self.table_threats.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table_threats.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table_threats.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.table_threats.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.table_threats.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.table_threats.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self.table_threats.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        self.table_threats.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        self.table_threats.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
+
+        layout.addWidget(self.table_threats, 1)
+
+    def set_data(self, games: List[DashboardGame], team_paste: str):
+        self._games = games
+        self._team_paste = team_paste or ""
+        if self._team_paste:
+            self.edit_paste.setText(self._team_paste)
+        self._parse_and_refresh_team()
+        self._start_calc()
+
+    def _parse_and_refresh_team(self):
+        paste_src = self.edit_paste.text().strip() or self._team_paste
+        self._team_members = mdc.parse_player_team(paste_src)
+        self.combo_attacker.blockSignals(True)
+        self.combo_attacker.clear()
+        for m in self._team_members:
+            item_str = f" @ {m.item}" if m.item else ""
+            self.combo_attacker.addItem(f"{m.species}{item_str}", m.species)
+        self.combo_attacker.blockSignals(False)
+
+    def _on_update_team_clicked(self):
+        self._parse_and_refresh_team()
+        self._start_calc()
+
+    def _start_calc(self):
+        if not self._games:
+            return
+        if not self._team_members:
+            self._parse_and_refresh_team()
+
+        top_n = self.spin_top_n.value()
+        self._threats = mdc.extract_top_meta_threats(self._games, top_n=top_n)
+        if not self._threats:
+            self.table_threats.setRowCount(0)
+            self.kpi_total_val.setText("0")
+            self.kpi_ohko_val.setText("0")
+            self.kpi_twohko_val.setText("0")
+            self.kpi_threehko_val.setText("0")
+            return
+
+        if not self._team_members:
+            # Crea fittiziamente membri basati su g.summary.me.team se non c'è paste
+            my_species_set = set()
+            for g in self._games:
+                if g.summary and g.summary.me.team:
+                    my_species_set.update(g.summary.me.team)
+            if my_species_set:
+                for sp in my_species_set:
+                    tm = TeamMember()
+                    tm.species = sp
+                    # Cerca le mosse usate dal giocatore nei replay
+                    used_moves = []
+                    for g in self._games:
+                        if g.summary and sp in g.summary.me.moves:
+                            used_moves.extend(list(g.summary.me.moves[sp].keys()))
+                    tm.moves = list(dict.fromkeys(used_moves))[:4] or ["Tackle"]
+                    self._team_members.append(tm)
+                self.combo_attacker.blockSignals(True)
+                self.combo_attacker.clear()
+                for m in self._team_members:
+                    self.combo_attacker.addItem(m.species, m.species)
+                self.combo_attacker.blockSignals(False)
+
+        if not self._team_members:
+            return
+
+        self.btn_recalc.setEnabled(False)
+        self.table_threats.setRowCount(0)
+        self.kpi_total_val.setText("Calcolo...")
+        self._worker = MetaDamageCalcWorker(self._team_members, self._threats, self)
+        self._worker.finished_ok.connect(self._on_calc_finished)
+        self._worker.failed.connect(self._on_calc_failed)
+        self._worker.start()
+
+    def _on_calc_finished(self, reports: Dict[str, mdc.TeamMemberDamageReport]):
+        self.btn_recalc.setEnabled(True)
+        self._reports = reports
+        self._render_current_attacker()
+
+    def _on_calc_failed(self, err_msg: str):
+        self.btn_recalc.setEnabled(True)
+        QMessageBox.warning(self, "Calcolo Danni Meta", f"Errore durante il calcolo dei danni:\n{err_msg}")
+
+    def _on_attacker_changed(self):
+        self._render_current_attacker()
+
+    def _render_current_attacker(self):
+        species = self.combo_attacker.currentData()
+        if not species or species not in self._reports:
+            return
+
+        rep = self._reports[species]
+        self.kpi_total_val.setText(str(len(rep.target_results)))
+        self.kpi_ohko_val.setText(str(rep.ohko_count))
+        self.kpi_twohko_val.setText(str(rep.twohko_count))
+        self.kpi_threehko_val.setText(str(rep.threehko_count))
+
+        self.table_threats.setRowCount(0)
+        for r_idx, res in enumerate(rep.target_results):
+            self.table_threats.insertRow(r_idx)
+            
+            # Col 0: Difensore Meta (Sprite + Nome)
+            w_def = QWidget()
+            w_def.setStyleSheet("background: transparent;")
+            h_def = QHBoxLayout(w_def)
+            h_def.setContentsMargins(4, 0, 4, 0)
+            h_def.setSpacing(8)
+            h_def.addWidget(PokemonSprite(res.threat.species, 36))
+            lbl_sp = _label(res.threat.species, f"font-weight: {Fonts.WEIGHT_BOLD}; color: {Palette.TEXT_PRIMARY};")
+            h_def.addWidget(lbl_sp)
+            h_def.addStretch()
+            self.table_threats.setCellWidget(r_idx, 0, w_def)
+
+            # Col 1: Presenza Replay
+            it_occ = QTableWidgetItem(f"{res.threat.appearances} replay ({res.threat.appearance_pct:.1f}%)")
+            it_occ.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            it_occ.setForeground(QColor(Palette.TEXT_MUTED))
+            self.table_threats.setItem(r_idx, 1, it_occ)
+
+            # Col 2: Speed Tier
+            spe_color = Palette.SUCCESS if res.speed_tier == "Piu Veloce" else (Palette.DANGER if res.speed_tier == "Piu Lento" else Palette.WARNING)
+            it_spe = QTableWidgetItem(f"{res.speed_tier} ({res.attacker_spe} vs {res.defender_spe})")
+            it_spe.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            it_spe.setForeground(QColor(spe_color))
+            self.table_threats.setItem(r_idx, 2, it_spe)
+
+            # Col 3: Mossa Migliore
+            bm = res.best_move
+            move_str = bm.move_name if bm else "—"
+            it_move = QTableWidgetItem(move_str)
+            it_move.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            it_move.setForeground(QColor(Palette.SECONDARY))
+            self.table_threats.setItem(r_idx, 3, it_move)
+
+            # Col 4: Danno Min %
+            min_p = f"{bm.min_pct:.1f}%" if bm else "0.0%"
+            it_min = QTableWidgetItem(min_p)
+            it_min.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.table_threats.setItem(r_idx, 4, it_min)
+
+            # Col 5: Danno Max %
+            max_p = f"{bm.max_pct:.1f}%" if bm else "0.0%"
+            it_max = QTableWidgetItem(max_p)
+            it_max.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            dmg_c = Palette.SUCCESS if (bm and bm.max_pct >= 100.0) else (Palette.PRIMARY if (bm and bm.max_pct >= 50.0) else Palette.DANGER)
+            it_max.setForeground(QColor(dmg_c))
+            self.table_threats.setItem(r_idx, 5, it_max)
+
+            # Col 6: KO Tier Badge
+            tier_color = Palette.SUCCESS if res.ko_tier == "1HKO" else (Palette.PRIMARY if res.ko_tier == "2HKO" else Palette.DANGER)
+            it_tier = QTableWidgetItem(res.ko_tier)
+            it_tier.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            it_tier.setForeground(QColor(tier_color))
+            it_tier.setFont(QFont(Fonts.FAMILY_UI, 9, QFont.Weight.Bold))
+            self.table_threats.setItem(r_idx, 6, it_tier)
+
+
 class SheetDashboardView(QWidget):
     """Dashboard Google Sheet + analisi nativa. Emette replay_requested(match_id)."""
     replay_requested = Signal(str)
@@ -925,10 +1221,18 @@ class SheetDashboardView(QWidget):
         self.tab_matchup = MatchupStatsTab()
         self.tab_usage = PokemonStatsTab()
         self.tab_team = TeamAnalysisTab()
+        self.tab_damage = MetaDamageCalcTab()
         self.tab_gbg = GameByGameTab()
+        from views.slot_analysis_tab import SlotAnalysisTab   # import lazy: evita import circolare
+        from views.player_core_tab import PlayerCoreTab
+        self.tab_slot = SlotAnalysisTab()
+        self.tab_player_core = PlayerCoreTab()
         self.tabs.addTab(self.tab_matchup, "Matchup Stats")
         self.tabs.addTab(self.tab_usage, "Statistiche Pokémon")
         self.tabs.addTab(self.tab_team, "Team Analysis")
+        self.tabs.addTab(self.tab_player_core, "Analisi Core & Matchup")
+        self.tabs.addTab(self.tab_slot, "Analisi Sostituzione")
+        self.tabs.addTab(self.tab_damage, "Damage vs Meta (Top 40)")
         self.tabs.addTab(self.tab_gbg, "Game By Game")
         self.tabs.setEnabled(False)
         root.addWidget(self.tabs, 1)
@@ -937,6 +1241,8 @@ class SheetDashboardView(QWidget):
         self.tab_gbg.filter_requested.connect(self.vm.set_filter)
         self.tab_gbg.replay_clicked.connect(self.open_replay)
         self.tab_team.replay_requested.connect(self.open_replay)
+        self.tab_slot.replay_requested.connect(self.open_replay)
+        self.tab_player_core.replay_requested.connect(self.open_replay)
 
     # ---- Caricamento ----
     def load(self):
@@ -990,6 +1296,8 @@ class SheetDashboardView(QWidget):
         games = self.vm.games
         self.tab_matchup.set_games(games)
         self.tab_gbg.set_options(ds.filter_options(games))
+        paste_url = self.vm.data.sheet.team_paste if self.vm.data and self.vm.data.sheet else ""
+        self.tab_damage.set_data(games, paste_url)
         self._on_filter_changed()
 
     def _on_filter_changed(self):
@@ -1000,6 +1308,8 @@ class SheetDashboardView(QWidget):
         st = ds.usage_stats(filtered, top_n=10**6)
         self.tab_usage.set_stats(filtered, total, st, self.vm.move_usage())
         self.tab_team.set_games(filtered)
+        self.tab_slot.set_games(filtered)
+        self.tab_player_core.set_games(filtered)
 
     # ---- Pop-up lead ----
     def _show_lead_popup(self, pair: tuple):

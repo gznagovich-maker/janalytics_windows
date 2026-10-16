@@ -24,7 +24,9 @@ from collections import Counter
 from pathlib import Path
 from typing import Iterable, List, Optional, Tuple
 
-from src.domain.sheet_dashboard.models import GameSummary, ParsedLog, SideData
+from src.domain.sheet_dashboard.models import (
+    GameSummary, KoEvent, ParsedLog, SideData, SwitchInEvent,
+)
 
 _HEADERS = {"User-Agent": "Mozilla/5.0 (JAnalytics/1.0)"}
 _REPLAY_HOST = "https://replay.pokemonshowdown.com"
@@ -133,10 +135,50 @@ def _split_ident(ident: str) -> Tuple[str, str]:
     return pos.strip()[:2], nick.strip()
 
 
+def _hp_pct(hp_field: str) -> Optional[float]:
+    """'32/100' -> 32.0, '150/200 par' -> 75.0, '0 fnt' -> 0.0."""
+    s = (hp_field or "").strip().split(" ")[0]
+    if s == "0":
+        return 0.0
+    if "/" in s:
+        cur, _, mx = s.partition("/")
+        try:
+            cur_f, mx_f = float(cur), float(mx)
+            return (cur_f / mx_f) * 100.0 if mx_f else None
+        except ValueError:
+            return None
+    return None
+
+
+def _from_tag(parts: List[str]) -> str:
+    for p in parts:
+        if p.startswith("[from]"):
+            return p[len("[from]"):].strip()
+    return ""
+
+
 def parse_log(log: str, replay_id: str = "") -> ParsedLog:
     sides = {"p1": _SideState("p1"), "p2": _SideState("p2")}
     parsed = ParsedLog(replay_id=replay_id)
     started_turns = False
+
+    # Stato di battaglia per KO / switch-in
+    turn = 0
+    preturn = False            # finestra hard switch: dopo |turn| e prima del 1° |move|
+    in_upkeep = False          # dopo |upkeep|: gli switch sono sostituzioni forzate
+    active: dict = {}          # "p1a" -> chiave Specie+Forma
+    hp: dict = {}              # (slot, chiave) -> HP %
+    last_hit: dict = {}        # (slot, chiave) -> ("direct", attaccante, mossa) | ("indirect", fonte)
+    open_sw: dict = {}         # (slot, chiave) -> SwitchInEvent
+    cur_move = None            # (slot attaccante, chiave attaccante, mossa)
+
+    def _key(slot: str, nick: str) -> Optional[str]:
+        return sides[slot].nick_to_key.get(nick) if slot in sides else None
+
+    def _close_open():
+        # hp_end è già il minimo HP raggiunto nel turno: le cure di fine
+        # turno (Grassy Terrain, Leftovers...) non devono mascherare il danno.
+        open_sw.clear()
 
     for line in log.splitlines():
         if not line.startswith("|"):
@@ -167,6 +209,20 @@ def parse_log(log: str, replay_id: str = "") -> ParsedLog:
 
         elif tag == "turn":
             started_turns = True
+            _close_open()
+            try:
+                turn = int(parts[2])
+            except (IndexError, ValueError):
+                turn += 1
+            preturn = True
+            in_upkeep = False
+            cur_move = None
+
+        elif tag == "upkeep":
+            _close_open()
+            in_upkeep = True
+            preturn = False
+            cur_move = None
 
         elif tag in ("switch", "drag", "replace") and len(parts) > 3:
             slot, nick = _split_ident(parts[2])
@@ -179,6 +235,24 @@ def parse_log(log: str, replay_id: str = "") -> ParsedLog:
                 st.data.mega, st.data.mega_forme = key, parts[3].split(",")[0].strip()
             if tag == "replace":
                 continue
+            pos = (parts[2].split(":")[0]).strip()
+            prev = active.get(pos)
+            # chi esce chiude il proprio switch-in aperto
+            if prev and (slot, prev) in open_sw:
+                open_sw.pop((slot, prev))
+            active[pos] = key
+            pct = _hp_pct(parts[4]) if len(parts) > 4 else None
+            if pct is not None:
+                hp[(slot, key)] = pct
+            if started_turns and not in_upkeep and tag == "switch":
+                frm = _from_tag(parts[5:])
+                kind = "pivot" if (frm or not preturn) else "hard"
+                ev = SwitchInEvent(
+                    pokemon=key, turn=turn, kind=kind, replaced=prev,
+                    hp_before=hp.get((slot, key), 100.0), hp_end=hp.get((slot, key), 100.0),
+                )
+                st.data.switch_ins.append(ev)
+                open_sw[(slot, key)] = ev
             if not started_turns:
                 if key not in st.data.lead:
                     st.data.lead.append(key)
@@ -202,20 +276,63 @@ def parse_log(log: str, replay_id: str = "") -> ParsedLog:
                     st.data.mega = key
 
         elif tag == "move" and len(parts) > 3:
+            preturn = False
+            slot, nick = _split_ident(parts[2])
+            key = _key(slot, nick)
+            cur_move = (slot, key, parts[3]) if key else None
             if any(p.startswith("[from]") for p in parts[4:]):
                 continue
-            slot, nick = _split_ident(parts[2])
             if slot in sides and parts[3] and parts[3] != "Struggle":
-                st = sides[slot]
-                key = st.nick_to_key.get(nick)
                 if key:
-                    st.data.moves.setdefault(key, Counter())[parts[3]] += 1
+                    sides[slot].data.moves.setdefault(key, Counter())[parts[3]] += 1
+
+        elif tag in ("-damage", "-heal", "-sethp") and len(parts) > 3:
+            slot, nick = _split_ident(parts[2])
+            key = _key(slot, nick)
+            if not key:
+                continue
+            pct = _hp_pct(parts[3])
+            if pct is not None:
+                hp[(slot, key)] = pct
+                if (slot, key) in open_sw and tag != "-heal":
+                    ev = open_sw[(slot, key)]
+                    ev.hp_end = min(ev.hp_end, pct)
+            if tag == "-damage":
+                frm = _from_tag(parts[4:])
+                if frm:
+                    last_hit[(slot, key)] = ("indirect", frm)
+                elif cur_move and cur_move[0] != slot:
+                    last_hit[(slot, key)] = ("direct", cur_move[1], cur_move[2])
+                    if (slot, key) in open_sw:
+                        open_sw[(slot, key)].hits.append((cur_move[1], cur_move[2]))
+
+        elif tag == "faint" and len(parts) > 2:
+            slot, nick = _split_ident(parts[2])
+            key = _key(slot, nick)
+            if not key:
+                continue
+            hp[(slot, key)] = 0.0
+            if (slot, key) in open_sw:
+                ev = open_sw.pop((slot, key))
+                ev.hp_end = 0.0
+            info = last_hit.get((slot, key))
+            ko = KoEvent(victim=key, turn=turn)
+            if info and info[0] == "direct":
+                ko.killer, ko.move = info[1], info[2]
+            elif info:
+                ko.indirect, ko.source = True, info[1]
+            else:
+                ko.indirect = True
+            sides[slot].data.kos_suffered.append(ko)
 
         elif tag == "win" and len(parts) > 2:
+            _close_open()
             parsed.winner = parts[2]
         elif tag == "tie":
+            _close_open()
             parsed.winner = "tie"
 
+    _close_open()
     parsed.sides = {k: v.data for k, v in sides.items()}
     return parsed
 
